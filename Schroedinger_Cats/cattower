@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Cat Tower Jump - Short Stage</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: #f0f8ff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      font-family: sans-serif;
+    }
+    #gameCanvas {
+      width: 360px;
+      height: 640px;
+      border: 2px solid #333;
+      margin-top: 10px;
+      display: block;
+      background: #ffffff;
+    }
+    #mobileControls {
+      margin-top: 10px;
+    }
+    #mobileControls button {
+      font-size: 1.2rem;
+      padding: 10px 20px;
+      margin: 5px;
+      min-width: 60px;
+      border-radius: 8px;
+      border: 1px solid #aaa;
+      background: #fff;
+    }
+    #info {
+      margin-top: 5px;
+      font-size: 14px;
+      color: #333;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas" width="360" height="640"></canvas>
+
+  <!-- スマホ用コントロール -->
+  <div id="mobileControls">
+    <button id="leftBtn">←</button>
+    <button id="rightBtn">→</button>
+    <button id="jumpBtn">Jump</button>
+  </div>
+
+  <div id="info">
+    PC操作: スペース=ジャンプ / L=右 / K=左
+  </div>
+
+  <!-- 猫の鳴き声ファイル (ブラウザの同一オリジン制約に注意) -->
+  <!-- 例: meow.wav を同フォルダに配置してください。 -->
+  <audio id="meowSound" src="meow.wav" preload="auto"></audio>
+
+  <script>
+    // ==========================================
+    // ゲーム設定・変数
+    // ==========================================
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    const CANVAS_WIDTH = canvas.width;   // 360
+    const CANVAS_HEIGHT = canvas.height; // 640
+
+    // 猫キャラ
+    let cat = {
+      x: 160,
+      y: 500,
+      width: 40,    // 当たり判定の幅
+      height: 40,   // 当たり判定の高さ
+      vx: 0,
+      vy: 0,
+      onGround: false,
+      facingRight: false
+    };
+
+    // 入力状態
+    let keys = { left: false, right: false, jump: false };
+
+    // 物理
+    const GRAVITY = 0.4;
+    const JUMP_POWER = -12;
+    const MOVE_SPEED = 3;
+
+    // 距離(上昇量)
+    let distance = 0;
+    let isGameRunning = true;
+
+    // ステージ区切り(短め)
+    const GROUND_END  = 500;   // 地上エリア 0～500
+    const SKY_END     = 1500;  // 空エリア 500～1500
+    const SPACE_END   = 2500;  // 宇宙エリア 1500～2500
+    const RAINBOW_END = 3000;  // 虹色エリア 2500～3000 → ゴール
+    const GOAL_DIST   = 3000;
+
+    // ライフ
+    let lives = 3;
+
+    // 猫の鳴き声
+    const meowSound = document.getElementById("meowSound");
+
+    // ==========================================
+    // キャットタワー(足場)
+    // ==========================================
+    const towerColors = [
+      "#ff7f7f", "#ff7fbf", "#ff7fff", "#bf7fff",
+      "#7fbfff", "#7fffff", "#7fffbf", "#7fff7f",
+      "#bfff7f", "#ffff7f", "#ffbf7f", "#7f7fff"
+    ];
+
+    let platforms = [];
+    const TOWER_COLUMN_WIDTH = 15;
+    const TOWER_COLUMN_HEIGHT = 50;
+
+    function initPlatforms() {
+      // 地面のような足場
+      platforms.push({
+        x: 0,
+        y: 600,
+        width: CANVAS_WIDTH,
+        height: 20,
+        color: "#ff7f7f"
+      });
+
+      // 初期足場
+      let currentY = 450;
+      for (let i = 0; i < 5; i++) {
+        addPlatform(currentY);
+        currentY -= 100;
+      }
+    }
+
+    function addPlatform(y) {
+      const w = 80, h = 10;
+      const x = Math.random() * (CANVAS_WIDTH - w);
+      const color = towerColors[Math.floor(Math.random() * towerColors.length)];
+      platforms.push({ x, y, width: w, height: h, color });
+    }
+
+    function addNewPlatformsIfNeeded() {
+      let topPlatformY = Infinity;
+      for (let p of platforms) {
+        if (p.y < topPlatformY) topPlatformY = p.y;
+      }
+      while (topPlatformY > 0) {
+        topPlatformY -= 100;
+        addPlatform(topPlatformY);
+      }
+    }
+
+    // ==========================================
+    // 障害物(雲、星、天使)
+    // ==========================================
+    let obstacles = [];
+    let frameCount = 0;
+
+    function spawnCloud() {
+      const symbol = "☁️";
+      const w = 30, h = 30;
+      const fromLeft = (Math.random() < 0.5);
+      let x, vx;
+      if (fromLeft) {
+        x = -w;
+        vx = 1 + Math.random() * 1;  // 1~2
+      } else {
+        x = CANVAS_WIDTH + w;
+        vx = -1 - Math.random() * 1; // -2~-1
+      }
+      const y = Math.random() * (CANVAS_HEIGHT / 2);
+      obstacles.push({ x, y, vx, width: w, height: h, symbol, type: "cloud" });
+    }
+
+    function spawnStar() {
+      const symbol = "✨";
+      const w = 20, h = 20;
+      const fromLeft = (Math.random() < 0.5);
+      let x, vx;
+      if (fromLeft) {
+        x = -w;
+        vx = 2 + Math.random() * 2;
+      } else {
+        x = CANVAS_WIDTH + w;
+        vx = -2 - Math.random() * 2;
+      }
+      const y = Math.random() * (CANVAS_HEIGHT / 2);
+      obstacles.push({ x, y, vx, width: w, height: h, symbol, type: "star" });
+    }
+
+    function spawnAngel() {
+      const symbol = "👼";
+      const w = 30, h = 30;
+      const fromLeft = (Math.random() < 0.5);
+      let x, vx;
+      if (fromLeft) {
+        x = -w;
+        vx = 3 + Math.random() * 2;
+      } else {
+        x = CANVAS_WIDTH + w;
+        vx = -3 - Math.random() * 2;
+      }
+      const y = Math.random() * (CANVAS_HEIGHT / 2);
+      obstacles.push({ x, y, vx, width: w, height: h, symbol, type: "angel" });
+    }
+
+    function getCurrentArea(dist) {
+      if (dist < GROUND_END)     return "ground";
+      if (dist < SKY_END)        return "sky";
+      if (dist < SPACE_END)      return "space";
+      if (dist < RAINBOW_END)    return "rainbow";
+      return "goal";
+    }
+
+    function updateObstacles() {
+      const area = getCurrentArea(distance);
+
+      // エリアに応じて障害物が出る
+      if (area === "sky") {
+        // 雲
+        if (frameCount % 120 === 0) {
+          spawnCloud();
+        }
+      } else if (area === "space") {
+        // 星
+        let freq = 90;
+        if (distance > 2000) freq = 60;
+        if (frameCount % freq === 0) spawnStar();
+      } else if (area === "rainbow") {
+        // 天使
+        let freq = 90;
+        if (frameCount % freq === 0) spawnAngel();
+      }
+
+      // 障害物の移動＆衝突判定
+      for (let i = 0; i < obstacles.length; i++) {
+        const o = obstacles[i];
+        o.x += o.vx;
+        // 画面外に消えたら除去
+        if (o.x < -100 || o.x > CANVAS_WIDTH + 100) {
+          obstacles.splice(i, 1);
+          i--;
+          continue;
+        }
+
+        // AABB判定: 四方どこからでも衝突
+        if (
+          cat.x < o.x + o.width &&
+          cat.x + cat.width > o.x &&
+          cat.y < o.y + o.height &&
+          cat.y + cat.height > o.y
+        ) {
+          // 衝突方向を判定するため、中心座標で比較
+          const catCenterX = cat.x + cat.width/2;
+          const catCenterY = cat.y + cat.height/2;
+          const obsCenterX = o.x + o.width/2;
+          const obsCenterY = o.y + o.height/2;
+
+          const dx = catCenterX - obsCenterX;
+          const dy = catCenterY - obsCenterY;
+
+          // 横方向・縦方向どちらの衝突が大きいか
+          if (Math.abs(dx) > Math.abs(dy)) {
+            // 左右衝突
+            if (dx > 0) {
+              // 猫が障害物より右側 => 右から左に押される
+              cat.vx = Math.min(cat.vx, 0);
+              cat.x = o.x + o.width; // 押し出し
+            } else {
+              // 猫が障害物より左側 => 左から右に押される
+              cat.vx = Math.max(cat.vx, 0);
+              cat.x = o.x - cat.width;
+            }
+            // 少し垂直速度もいじるならやってもOK
+            // cat.vy = 3; など
+          } else {
+            // 上下衝突
+            if (dy > 0) {
+              // 猫が障害物より下 => 下から上に押し出し
+              cat.y = o.y + o.height;
+              // 上に弾きたい場合
+              cat.vy = Math.max(cat.vy, 0);
+            } else {
+              // 猫が障害物より上 => 上から下に押し出し
+              cat.y = o.y - cat.height;
+              // 下に弾きたい場合
+              cat.vy = Math.min(cat.vy, 0) + 5;
+            }
+          }
+        }
+      }
+    }
+
+    // ==========================================
+    // キーボード入力
+    // ==========================================
+    document.addEventListener("keydown", (e) => {
+      if (e.code === "Space") {
+        keys.jump = true;
+      }
+      if (e.key === "l" || e.key === "L") {
+        keys.right = true;
+      }
+      if (e.key === "k" || e.key === "K") {
+        keys.left = true;
+      }
+    });
+    document.addEventListener("keyup", (e) => {
+      if (e.code === "Space") {
+        keys.jump = false;
+      }
+      if (e.key === "l" || e.key === "L") {
+        keys.right = false;
+      }
+      if (e.key === "k" || e.key === "K") {
+        keys.left = false;
+      }
+    });
+
+    // ==========================================
+    // スマホ(ボタン)入力
+    // ==========================================
+    const leftBtn = document.getElementById("leftBtn");
+    const rightBtn = document.getElementById("rightBtn");
+    const jumpBtn = document.getElementById("jumpBtn");
+
+    function pressLeft(val)  { keys.left  = val; }
+    function pressRight(val) { keys.right = val; }
+    function pressJump(val)  { keys.jump  = val; }
+
+    // タッチ / マウス
+    leftBtn.addEventListener("touchstart",  () => pressLeft(true));
+    leftBtn.addEventListener("touchend",    () => pressLeft(false));
+    leftBtn.addEventListener("mousedown",   () => pressLeft(true));
+    leftBtn.addEventListener("mouseup",     () => pressLeft(false));
+
+    rightBtn.addEventListener("touchstart", () => pressRight(true));
+    rightBtn.addEventListener("touchend",   () => pressRight(false));
+    rightBtn.addEventListener("mousedown",  () => pressRight(true));
+    rightBtn.addEventListener("mouseup",    () => pressRight(false));
+
+    jumpBtn.addEventListener("touchstart",  () => pressJump(true));
+    jumpBtn.addEventListener("touchend",    () => pressJump(false));
+    jumpBtn.addEventListener("mousedown",   () => pressJump(true));
+    jumpBtn.addEventListener("mouseup",     () => pressJump(false));
+
+    // ==========================================
+    // update
+    // ==========================================
+    function update() {
+      if (!isGameRunning) return;
+
+      // 横移動
+      cat.vx = 0;
+      if (keys.left)  { cat.vx = -MOVE_SPEED; cat.facingRight = false; }
+      if (keys.right) { cat.vx =  MOVE_SPEED; cat.facingRight = true; }
+
+      // ジャンプ
+      if (keys.jump && cat.onGround) {
+        cat.vy = JUMP_POWER;
+        cat.onGround = false;
+        // ランダムでmeow再生(例: 20%の確率)
+        if (Math.random() < 0.2) {
+          // ユーザーアクション後であれば再生可能
+          meowSound.currentTime = 0;
+          meowSound.play().catch(e => console.log(e));
+        }
+      }
+
+      // 重力
+      cat.vy += GRAVITY;
+
+      // 座標更新
+      cat.x += cat.vx;
+      cat.y += cat.vy;
+
+      // 画面左右端のはみ出し防止
+      if (cat.x < 0) {
+        cat.x = 0;
+      } else if (cat.x + cat.width > CANVAS_WIDTH) {
+        cat.x = CANVAS_WIDTH - cat.width;
+      }
+
+      // 足場との衝突
+      cat.onGround = false;
+      for (let p of platforms) {
+        if (
+          cat.x < p.x + p.width &&
+          cat.x + cat.width > p.x &&
+          cat.y + cat.height > p.y &&
+          cat.y + cat.height - cat.vy <= p.y
+        ) {
+          cat.y = p.y - cat.height;
+          cat.vy = 0;
+          cat.onGround = true;
+        }
+      }
+
+      // 落下(画面下に消えた)チェック
+      if (cat.y > CANVAS_HEIGHT) {
+        lives--;
+        if (lives <= 0) {
+          alert("Game Over...リトライしてね");
+          isGameRunning = false;
+        } else {
+          // 再配置
+          cat.x = 160;
+          cat.y = 200;
+          cat.vy = 0;
+          cat.onGround = false;
+        }
+      }
+
+      // 上に行ったらステージを下げる
+      if (cat.y < 200) {
+        const diff = 200 - cat.y;
+        cat.y = 200;
+        for (let p of platforms) {
+          p.y += diff;
+        }
+        for (let o of obstacles) {
+          o.y += diff;
+        }
+        distance += diff;
+        addNewPlatformsIfNeeded();
+      }
+
+      // 障害物更新
+      updateObstacles();
+
+      // ゴール判定
+      if (distance >= GOAL_DIST) {
+        alert("ゴール！おめでとう！！");
+        isGameRunning = false;
+      }
+    }
+
+    // ==========================================
+    // draw
+    // ==========================================
+    function draw() {
+      drawBackground();
+      drawPlatforms();
+      drawObstacles();
+      drawCat();
+      drawHUD();
+    }
+
+    function drawBackground() {
+      let area = getCurrentArea(distance);
+      if (area === "ground") {
+        ctx.fillStyle = "#fff"; // 地上(淡い黄色)
+      } else if (area === "sky") {
+        ctx.fillStyle = "#cceeff"; // 空(水色)
+      } else if (area === "space") {
+        ctx.fillStyle = "#303060"; // 宇宙(紺色)
+      } else if (area === "rainbow") {
+        // 簡易虹色グラデーション
+        let grad = ctx.createLinearGradient(0,0,CANVAS_WIDTH,0);
+        grad.addColorStop(0,   "#ff8a8a"); 
+        grad.addColorStop(0.2, "#ffe48a");
+        grad.addColorStop(0.4, "#d1ff8a");
+        grad.addColorStop(0.6, "#8afff6");
+        grad.addColorStop(0.8, "#8ad1ff");
+        grad.addColorStop(1,   "#d48aff");
+        ctx.fillStyle = grad;
+      } else {
+        // ゴール後(一応白っぽい)
+        ctx.fillStyle = "#eaeaea";
+      }
+      ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    }
+
+    function drawPlatforms() {
+      for (let p of platforms) {
+        // 足場
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x, p.y, p.width, p.height);
+        // 支柱
+        let cx = p.x + p.width/2 - TOWER_COLUMN_WIDTH/2;
+        let cy = p.y;
+        ctx.fillRect(cx, cy, TOWER_COLUMN_WIDTH, TOWER_COLUMN_HEIGHT);
+      }
+    }
+
+    function drawObstacles() {
+      ctx.font = "28px serif";
+      ctx.textBaseline = "top";
+      for (let o of obstacles) {
+        ctx.fillText(o.symbol, o.x, o.y);
+      }
+    }
+
+    function drawCat() {
+      // 絵文字で猫を描画
+      const catEmoji = "🐈";
+      ctx.save();
+      ctx.font = "38px serif"; 
+      ctx.textBaseline = "top";
+
+      // 猫が足場に接地しているように見えるよう、
+      // 多少yを調整(環境によっては+/-数pxを変更)
+      let drawX = cat.x;
+      let drawY = cat.y - 6;  // ←上に少し引き上げて「浮かない」ように
+
+      if (!cat.facingRight) {
+        // 左向き
+        ctx.translate(drawX, drawY);
+        ctx.fillText(catEmoji, 0, 0);
+      } else {
+        // 右向き(反転)
+        ctx.translate(drawX + cat.width, drawY);
+        ctx.scale(-1, 1);
+        ctx.fillText(catEmoji, 0, 0);
+      }
+      ctx.restore();
+    }
+
+    function drawHUD() {
+      // 距離
+      ctx.fillStyle = "#000";
+      ctx.font = "16px sans-serif";
+      ctx.fillText(`Height: ${Math.floor(distance)}`, 10, 10);
+
+      // ライフ(🐟)
+      let fishX = 10;
+      let fishY = 30;
+      for (let i = 0; i < lives; i++) {
+        ctx.fillText("🐟", fishX + i*25, fishY);
+      }
+    }
+
+    // ==========================================
+    // ゲームループ
+    // ==========================================
+    function gameLoop() {
+      frameCount++;
+      update();
+      ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      draw();
+      if (isGameRunning) {
+        requestAnimationFrame(gameLoop);
+      }
+    }
+
+    // 初期化
+    initPlatforms();
+    gameLoop();
+  </script>
+</body>
+</html>
