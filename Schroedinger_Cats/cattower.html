@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>Cat Tower Jump - Short Stage</title>
+  <title>Cat Tower Jump - Extended Stages</title>
   <style>
     body {
       margin: 0;
@@ -44,7 +44,6 @@
 <body>
   <canvas id="gameCanvas" width="360" height="640"></canvas>
 
-  <!-- スマホ用コントロール -->
   <div id="mobileControls">
     <button id="leftBtn">←</button>
     <button id="rightBtn">→</button>
@@ -55,8 +54,7 @@
     PC操作: スペース=ジャンプ / L=右 / K=左
   </div>
 
-  <!-- 猫の鳴き声ファイル (ブラウザの同一オリジン制約に注意) -->
-  <!-- 例: meow.wav を同フォルダに配置してください。 -->
+  <!-- 猫の鳴き声ファイル -->
   <audio id="meowSound" src="meow.wav" preload="auto"></audio>
 
   <script>
@@ -73,8 +71,8 @@
     let cat = {
       x: 160,
       y: 500,
-      width: 40,    // 当たり判定の幅
-      height: 40,   // 当たり判定の高さ
+      width: 40,
+      height: 40,
       vx: 0,
       vy: 0,
       onGround: false,
@@ -93,12 +91,14 @@
     let distance = 0;
     let isGameRunning = true;
 
-    // ステージ区切り(短め)
-    const GROUND_END  = 500;   // 地上エリア 0～500
-    const SKY_END     = 1500;  // 空エリア 500～1500
-    const SPACE_END   = 2500;  // 宇宙エリア 1500～2500
-    const RAINBOW_END = 3000;  // 虹色エリア 2500～3000 → ゴール
-    const GOAL_DIST   = 3000;
+    // ========★ ここを修正 ★========
+    // 地上エリアだけ 0～500 (変わらず)
+    // それ以降のエリアはすべて3倍に
+    const GROUND_END  = 500;   // もとの: 500
+    const SKY_END     = 3500;  // 500 + 1000×3 = 3500
+    const SPACE_END   = 6500;  // 3500 + 1000×3 = 6500
+    const RAINBOW_END = 8000;  // 6500 + 500×3  = 8000
+    const GOAL_DIST   = 8000;
 
     // ライフ
     let lives = 3;
@@ -120,7 +120,7 @@
     const TOWER_COLUMN_HEIGHT = 50;
 
     function initPlatforms() {
-      // 地面のような足場
+      // 地面
       platforms.push({
         x: 0,
         y: 600,
@@ -210,85 +210,74 @@
     }
 
     function getCurrentArea(dist) {
-      if (dist < GROUND_END)     return "ground";
-      if (dist < SKY_END)        return "sky";
-      if (dist < SPACE_END)      return "space";
-      if (dist < RAINBOW_END)    return "rainbow";
+      if (dist < GROUND_END)      return "ground";
+      if (dist < SKY_END)         return "sky";
+      if (dist < SPACE_END)       return "space";
+      if (dist < RAINBOW_END)     return "rainbow";
       return "goal";
     }
 
     function updateObstacles() {
       const area = getCurrentArea(distance);
 
-      // エリアに応じて障害物が出る
+      // 空エリアで雲
       if (area === "sky") {
-        // 雲
-        if (frameCount % 120 === 0) {
-          spawnCloud();
-        }
-      } else if (area === "space") {
-        // 星
+        if (frameCount % 120 === 0) spawnCloud();
+      }
+      // 宇宙エリアで星
+      else if (area === "space") {
         let freq = 90;
-        if (distance > 2000) freq = 60;
+        if (distance > 2000) freq = 60; 
         if (frameCount % freq === 0) spawnStar();
-      } else if (area === "rainbow") {
-        // 天使
+      }
+      // 虹色エリアで天使
+      else if (area === "rainbow") {
         let freq = 90;
         if (frameCount % freq === 0) spawnAngel();
       }
 
-      // 障害物の移動＆衝突判定
+      // 移動＆四方衝突判定
       for (let i = 0; i < obstacles.length; i++) {
         const o = obstacles[i];
         o.x += o.vx;
-        // 画面外に消えたら除去
+        // 画面外で削除
         if (o.x < -100 || o.x > CANVAS_WIDTH + 100) {
           obstacles.splice(i, 1);
           i--;
           continue;
         }
-
-        // AABB判定: 四方どこからでも衝突
+        // AABB衝突→どの方向から衝突か
         if (
           cat.x < o.x + o.width &&
           cat.x + cat.width > o.x &&
           cat.y < o.y + o.height &&
           cat.y + cat.height > o.y
         ) {
-          // 衝突方向を判定するため、中心座標で比較
           const catCenterX = cat.x + cat.width/2;
           const catCenterY = cat.y + cat.height/2;
           const obsCenterX = o.x + o.width/2;
           const obsCenterY = o.y + o.height/2;
-
           const dx = catCenterX - obsCenterX;
           const dy = catCenterY - obsCenterY;
 
-          // 横方向・縦方向どちらの衝突が大きいか
           if (Math.abs(dx) > Math.abs(dy)) {
             // 左右衝突
             if (dx > 0) {
-              // 猫が障害物より右側 => 右から左に押される
+              cat.x = o.x + o.width;
               cat.vx = Math.min(cat.vx, 0);
-              cat.x = o.x + o.width; // 押し出し
             } else {
-              // 猫が障害物より左側 => 左から右に押される
-              cat.vx = Math.max(cat.vx, 0);
               cat.x = o.x - cat.width;
+              cat.vx = Math.max(cat.vx, 0);
             }
-            // 少し垂直速度もいじるならやってもOK
-            // cat.vy = 3; など
           } else {
             // 上下衝突
             if (dy > 0) {
-              // 猫が障害物より下 => 下から上に押し出し
+              // 下側
               cat.y = o.y + o.height;
-              // 上に弾きたい場合
               cat.vy = Math.max(cat.vy, 0);
             } else {
-              // 猫が障害物より上 => 上から下に押し出し
+              // 上側
               cat.y = o.y - cat.height;
-              // 下に弾きたい場合
               cat.vy = Math.min(cat.vy, 0) + 5;
             }
           }
@@ -323,7 +312,7 @@
     });
 
     // ==========================================
-    // スマホ(ボタン)入力
+    // スマホボタン入力
     // ==========================================
     const leftBtn = document.getElementById("leftBtn");
     const rightBtn = document.getElementById("rightBtn");
@@ -333,7 +322,6 @@
     function pressRight(val) { keys.right = val; }
     function pressJump(val)  { keys.jump  = val; }
 
-    // タッチ / マウス
     leftBtn.addEventListener("touchstart",  () => pressLeft(true));
     leftBtn.addEventListener("touchend",    () => pressLeft(false));
     leftBtn.addEventListener("mousedown",   () => pressLeft(true));
@@ -364,9 +352,8 @@
       if (keys.jump && cat.onGround) {
         cat.vy = JUMP_POWER;
         cat.onGround = false;
-        // ランダムでmeow再生(例: 20%の確率)
+        // ランダムでmeow再生(20%)
         if (Math.random() < 0.2) {
-          // ユーザーアクション後であれば再生可能
           meowSound.currentTime = 0;
           meowSound.play().catch(e => console.log(e));
         }
@@ -374,12 +361,11 @@
 
       // 重力
       cat.vy += GRAVITY;
-
       // 座標更新
       cat.x += cat.vx;
       cat.y += cat.vy;
 
-      // 画面左右端のはみ出し防止
+      // 左右はみ出し防止
       if (cat.x < 0) {
         cat.x = 0;
       } else if (cat.x + cat.width > CANVAS_WIDTH) {
@@ -401,14 +387,13 @@
         }
       }
 
-      // 落下(画面下に消えた)チェック
+      // 落下チェック
       if (cat.y > CANVAS_HEIGHT) {
         lives--;
         if (lives <= 0) {
           alert("Game Over...リトライしてね");
           isGameRunning = false;
         } else {
-          // 再配置
           cat.x = 160;
           cat.y = 200;
           cat.vy = 0;
@@ -416,7 +401,7 @@
         }
       }
 
-      // 上に行ったらステージを下げる
+      // 上昇に伴う画面スクロール
       if (cat.y < 200) {
         const diff = 200 - cat.y;
         cat.y = 200;
@@ -454,13 +439,12 @@
     function drawBackground() {
       let area = getCurrentArea(distance);
       if (area === "ground") {
-        ctx.fillStyle = "#fff"; // 地上(淡い黄色)
+        ctx.fillStyle = "#fff";
       } else if (area === "sky") {
-        ctx.fillStyle = "#cceeff"; // 空(水色)
+        ctx.fillStyle = "#cceeff";
       } else if (area === "space") {
-        ctx.fillStyle = "#303060"; // 宇宙(紺色)
+        ctx.fillStyle = "#303060";
       } else if (area === "rainbow") {
-        // 簡易虹色グラデーション
         let grad = ctx.createLinearGradient(0,0,CANVAS_WIDTH,0);
         grad.addColorStop(0,   "#ff8a8a"); 
         grad.addColorStop(0.2, "#ffe48a");
@@ -470,7 +454,6 @@
         grad.addColorStop(1,   "#d48aff");
         ctx.fillStyle = grad;
       } else {
-        // ゴール後(一応白っぽい)
         ctx.fillStyle = "#eaeaea";
       }
       ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
@@ -478,7 +461,6 @@
 
     function drawPlatforms() {
       for (let p of platforms) {
-        // 足場
         ctx.fillStyle = p.color;
         ctx.fillRect(p.x, p.y, p.width, p.height);
         // 支柱
@@ -497,23 +479,18 @@
     }
 
     function drawCat() {
-      // 絵文字で猫を描画
       const catEmoji = "🐈";
       ctx.save();
-      ctx.font = "38px serif"; 
+      ctx.font = "38px serif";
       ctx.textBaseline = "top";
 
-      // 猫が足場に接地しているように見えるよう、
-      // 多少yを調整(環境によっては+/-数pxを変更)
       let drawX = cat.x;
-      let drawY = cat.y - 6;  // ←上に少し引き上げて「浮かない」ように
+      let drawY = cat.y - 6; // 浮かないように少し上へ
 
       if (!cat.facingRight) {
-        // 左向き
         ctx.translate(drawX, drawY);
         ctx.fillText(catEmoji, 0, 0);
       } else {
-        // 右向き(反転)
         ctx.translate(drawX + cat.width, drawY);
         ctx.scale(-1, 1);
         ctx.fillText(catEmoji, 0, 0);
@@ -536,7 +513,7 @@
     }
 
     // ==========================================
-    // ゲームループ
+    // メインループ
     // ==========================================
     function gameLoop() {
       frameCount++;
@@ -548,7 +525,6 @@
       }
     }
 
-    // 初期化
     initPlatforms();
     gameLoop();
   </script>
