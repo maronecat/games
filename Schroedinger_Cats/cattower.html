@@ -2,20 +2,24 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>Cat Tower Jump - Mobile Friendly</title>
-  <!-- スマホのピンチズームを無効化する -->
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Cat Tower Jump - Multi Stages</title>
+
+  <!-- スマホでのピンチズームを無効化 + ダブルタップによる拡大を抑止 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+
   <style>
-    /* 画面全体・ボタンなどテキスト選択無効 */
+    /* テキスト選択や長押しメニューを無効化 + ダブルタップ抑止にtouch-action */
     html, body {
       margin: 0;
       padding: 0;
       background: #f0f8ff;
-      -webkit-touch-callout: none; /* 長押し時のiOSの操作メニューを無効化 */
-      -webkit-user-select: none;   /* Safari/Chromeなど */
-      -moz-user-select: none;      /* Firefox */
-      -ms-user-select: none;       /* IE10+ */
-      user-select: none;           /* 標準 */
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+      user-select: none;
+      touch-action: none; /* ダブルタップズーム抑止 (iOSで有効な場合が多い) */
+      overflow: hidden;   /* ゲーム画面にスクロール不要なら overflowを隠す */
     }
 
     body {
@@ -35,21 +39,19 @@
       background: #ffffff;
     }
 
-    /* ボタンのデザイン・サイズを少し大きめにしてタップしやすく */
     #mobileControls {
       margin-top: 10px;
       display: flex;
       flex-direction: row;
-      justify-content: center;
       gap: 10px;
     }
+
     #mobileControls button {
       font-size: 1.2rem;
-      padding: 15px 25px; /* 大きめに調整 */
+      padding: 15px 25px;
       border-radius: 8px;
       border: 1px solid #aaa;
       background: #fff;
-      /* ボタンを押したときのハイライト */
       -webkit-tap-highlight-color: rgba(0,0,0,0);
     }
 
@@ -58,12 +60,12 @@
       font-size: 14px;
       color: #333;
     }
-
   </style>
 </head>
 <body>
   <canvas id="gameCanvas" width="360" height="640"></canvas>
 
+  <!-- スマホ用コントローラ -->
   <div id="mobileControls">
     <button id="leftBtn">←</button>
     <button id="rightBtn">→</button>
@@ -74,20 +76,26 @@
     PC操作: スペース=ジャンプ / L=右 / K=左
   </div>
 
-  <!-- 猫の鳴き声ファイル -->
+  <!-- BGM (ループ) + 猫の鳴き声 -->
+  <audio id="bgmAudio" src="bgm01.wav" preload="auto" loop></audio>
   <audio id="meowSound" src="meow.wav" preload="auto"></audio>
 
   <script>
-    // =============================
-    //  ゲーム設定・変数
-    // =============================
+    // ダブルクリックでの拡大を抑止（PCブラウザでも無効化）
+    document.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+    }, { passive: false });
+
+    // ------------------------------------------
+    // ゲーム設定・変数
+    // ------------------------------------------
     const canvas = document.getElementById("gameCanvas");
     const ctx = canvas.getContext("2d");
 
-    const CANVAS_WIDTH = canvas.width;   // 360
-    const CANVAS_HEIGHT = canvas.height; // 640
+    const CANVAS_WIDTH = canvas.width;   
+    const CANVAS_HEIGHT = canvas.height; 
 
-    // 猫パラメータ
+    // 猫キャラ
     let cat = {
       x: 160,
       y: 500,
@@ -107,22 +115,35 @@
     const JUMP_POWER = -12;
     const MOVE_SPEED = 3;
 
-    // 距離(上昇量)
+    // 距離
     let distance = 0;
     let isGameRunning = true;
     let lives = 3;
 
-    // ステージ区切り (例: 短め設定)
-    const GROUND_END  = 500;    // 地上(最初)
-    const SKY_END     = 1500;   // 空
-    const SPACE_END   = 2500;   // 宇宙
-    const RAINBOW_END = 3000;   // 虹色
-    const GOAL_DIST   = 3000;   // ゴール
+    // ------ エリア設定 ------
+    // 0～1000    地上 (#f3f4f4)         障害物なし
+    // 1000～2000 空 (#cceeff)           障害物: 🕊️(鳥)
+    // 2000～3000 オゾン層 (#88bbff)     障害物: ☁️(雲)
+    // 3000～4000 宇宙 (#303060)         障害物: ✨(星)
+    // 4000～5000 虹色(gradient)         障害物: 👼(天使, くねくね移動)
+    // 5000 でゴール
+    const GROUND_END  = 3000;
+    const SKY_END     = 6000;
+    const OZONE_END   = 9000;
+    const SPACE_END   = 12000;
+    const RAINBOW_END = 15000;
+    const GOAL_DIST   = 18000;
 
-    // 音声
+    // BGM
+    const bgmAudio = document.getElementById("bgmAudio");
+    let bgmStarted = false;
+
+    // 猫の鳴き声
     const meowSound = document.getElementById("meowSound");
 
-    // キャットタワー
+    // ------------------------------------------
+    // キャットタワー関係
+    // ------------------------------------------
     const towerColors = [
       "#ff7f7f", "#ff7fbf", "#ff7fff", "#bf7fff",
       "#7fbfff", "#7fffff", "#7fffbf", "#7fff7f",
@@ -132,16 +153,16 @@
     const TOWER_COLUMN_WIDTH = 15;
     const TOWER_COLUMN_HEIGHT = 50;
 
+    // 最終踏み台を特別デザインにしたい → distance が GOAL_DIST 近い場合に色を変えるなど
+    // 後で drawPlatforms() で実装
+
     function initPlatforms() {
-      // 地面っぽい足場
+      // 地面用
       platforms.push({
-        x: 0,
-        y: 600,
-        width: CANVAS_WIDTH,
-        height: 20,
+        x: 0, y: 600,
+        width: CANVAS_WIDTH, height: 20,
         color: "#ff7f7f"
       });
-
       // 初期足場
       let currentY = 450;
       for (let i = 0; i < 5; i++) {
@@ -158,104 +179,157 @@
     }
 
     function addNewPlatformsIfNeeded() {
-      let topPlatformY = Infinity;
+      let topY = Infinity;
       for (let p of platforms) {
-        if (p.y < topPlatformY) topPlatformY = p.y;
+        if (p.y < topY) topY = p.y;
       }
-      while (topPlatformY > 0) {
-        topPlatformY -= 100;
-        addPlatform(topPlatformY);
+      while (topY > 0) {
+        topY -= 100;
+        addPlatform(topY);
       }
     }
 
+    // ------------------------------------------
     // 障害物
+    // ------------------------------------------
     let obstacles = [];
     let frameCount = 0;
 
+    // 各障害物の生成
+    function spawnBird() {
+      // 🕊️
+      const symbol = "🕊️";
+      const w = 30, h = 30;
+      const fromLeft = (Math.random() < 0.5);
+      let x, vx;
+      if (fromLeft) {
+        x = -w; vx = 1 + Math.random() * 1; // 1~2
+      } else {
+        x = CANVAS_WIDTH + w; vx = -1 - Math.random() * 1; // -2~-1
+      }
+      const y = Math.random() * (CANVAS_HEIGHT / 2);
+      obstacles.push({ x, y, vx, width: w, height: h, symbol, type:"bird" });
+    }
+
     function spawnCloud() {
+      // ☁️
       const symbol = "☁️";
       const w = 30, h = 30;
       const fromLeft = (Math.random() < 0.5);
       let x, vx;
       if (fromLeft) {
-        x = -w;
-        vx = 1 + Math.random() * 1;
+        x = -w; vx = 1 + Math.random() * 1;
       } else {
-        x = CANVAS_WIDTH + w;
-        vx = -1 - Math.random() * 1;
+        x = CANVAS_WIDTH + w; vx = -1 - Math.random() * 1;
       }
       const y = Math.random() * (CANVAS_HEIGHT / 2);
-      obstacles.push({ x, y, vx, width: w, height: h, symbol, type: "cloud" });
+      obstacles.push({ x, y, vx, width: w, height: h, symbol, type:"cloud" });
     }
 
     function spawnStar() {
+      // ✨
       const symbol = "✨";
       const w = 20, h = 20;
       const fromLeft = (Math.random() < 0.5);
       let x, vx;
       if (fromLeft) {
-        x = -w;
-        vx = 2 + Math.random() * 2;
+        x = -w; vx = 2 + Math.random() * 2;
       } else {
-        x = CANVAS_WIDTH + w;
-        vx = -2 - Math.random() * 2;
+        x = CANVAS_WIDTH + w; vx = -2 - Math.random() * 2;
       }
       const y = Math.random() * (CANVAS_HEIGHT / 2);
-      obstacles.push({ x, y, vx, width: w, height: h, symbol, type: "star" });
+      obstacles.push({ x, y, vx, width: w, height: h, symbol, type:"star" });
     }
 
     function spawnAngel() {
+      // 👼 (くねくね移動をさせる)
       const symbol = "👼";
       const w = 30, h = 30;
       const fromLeft = (Math.random() < 0.5);
       let x, vx;
       if (fromLeft) {
-        x = -w;
-        vx = 3 + Math.random() * 2;
+        x = -w; vx = 3 + Math.random() * 2;
       } else {
-        x = CANVAS_WIDTH + w;
-        vx = -3 - Math.random() * 2;
+        x = CANVAS_WIDTH + w; vx = -3 - Math.random() * 2;
       }
       const y = Math.random() * (CANVAS_HEIGHT / 2);
-      obstacles.push({ x, y, vx, width: w, height: h, symbol, type: "angel" });
+      // 追加で上下揺れなどのパラメータ
+      const wiggleAmp = 1 + Math.random() * 2;  // 揺れ幅
+      const wiggleFreq = 0.01 + Math.random() * 0.02; // 周波数
+      obstacles.push({
+        x, y, vx, width:w, height:h, symbol,
+        type:"angel",
+        wiggleAmp, wiggleFreq,
+        baseY: y // 基準
+      });
     }
 
     function getCurrentArea(dist) {
-      if (dist < GROUND_END)      return "ground";
-      if (dist < SKY_END)         return "sky";
-      if (dist < SPACE_END)       return "space";
-      if (dist < RAINBOW_END)     return "rainbow";
+      if (dist < GROUND_END)    return "ground";
+      if (dist < SKY_END)       return "sky";
+      if (dist < OZONE_END)     return "ozone";
+      if (dist < SPACE_END)     return "space";
+      if (dist < RAINBOW_END)   return "rainbow";
       return "goal";
     }
 
+    // 障害物の更新
     function updateObstacles() {
       const area = getCurrentArea(distance);
 
-      // 空で雲
+      // 上に行くほど障害物が増える＆速い → area に応じてフレーム周期や速度アップ
+      frameCount++;
+      let freq = 120; // 出現間隔の基本
+      let speedBonus = 0; // 追加速度のしやすさ
+
       if (area === "sky") {
-        if (frameCount % 120 === 0) spawnCloud();
+        // 🕊️鳥を出す
+        // ex) freq=100ぐらいにして鳥生成
+        freq = 100;
+        if (frameCount % freq === 0) spawnBird();
       }
-      // 宇宙で星
+      else if (area === "ozone") {
+        // ☁️雲
+        freq = 90;
+        if (distance > 2500) freq = 70; // 進むほど頻度増
+        if (frameCount % freq === 0) spawnCloud();
+      }
       else if (area === "space") {
-        let freq = 90;
-        if (distance > 2000) freq = 60;
+        // ✨星
+        freq = 80;
+        if (distance > 3500) freq = 60;
         if (frameCount % freq === 0) spawnStar();
       }
-      // 虹色で天使
       else if (area === "rainbow") {
-        let freq = 90;
+        // 👼天使(くねくね)
+        freq = 70;
+        if (distance > 4500) freq = 50; // 終盤ほど更に多く
         if (frameCount % freq === 0) spawnAngel();
       }
 
-      // 移動＆当たり判定
+      // 移動＆衝突
       for (let i = 0; i < obstacles.length; i++) {
-        const o = obstacles[i];
-        o.x += o.vx;
+        let o = obstacles[i];
+
+        // 虹色エリアの天使だけ上下にくねくねさせる例
+        if (o.type === "angel") {
+          // sin波で上下にゆらす
+          const wave = Math.sin(frameCount * o.wiggleFreq) * o.wiggleAmp;
+          o.y = o.baseY + wave * 10; // 10倍して振幅調整
+        }
+
+        // 速度
+        // エリアが上がるほど速い？ → 追加で + (distance / 2000) とか
+        let areaFactor = 1 + (distance / 3000); 
+        o.x += o.vx * areaFactor;
+
+        // 画面外に出たら消去
         if (o.x < -100 || o.x > CANVAS_WIDTH + 100) {
-          obstacles.splice(i,1);
+          obstacles.splice(i, 1);
           i--;
           continue;
         }
+
         // AABB衝突
         if (
           cat.x < o.x + o.width &&
@@ -263,13 +337,13 @@
           cat.y < o.y + o.height &&
           cat.y + cat.height > o.y
         ) {
-          // 衝突方向判定
-          const catCenterX = cat.x + cat.width/2;
-          const catCenterY = cat.y + cat.height/2;
-          const obsCenterX = o.x + o.width/2;
-          const obsCenterY = o.y + o.height/2;
-          const dx = catCenterX - obsCenterX;
-          const dy = catCenterY - obsCenterY;
+          // 衝突方向を判定
+          const cx = cat.x + cat.width/2;
+          const cy = cat.y + cat.height/2;
+          const ox = o.x + o.width/2;
+          const oy = o.y + o.height/2;
+          const dx = cx - ox;
+          const dy = cy - oy;
 
           if (Math.abs(dx) > Math.abs(dy)) {
             // 左右衝突
@@ -283,9 +357,11 @@
           } else {
             // 上下衝突
             if (dy > 0) {
+              // 下
               cat.y = o.y + o.height;
               cat.vy = Math.max(cat.vy, 0);
             } else {
+              // 上
               cat.y = o.y - cat.height;
               cat.vy = Math.min(cat.vy, 0) + 5;
             }
@@ -294,57 +370,63 @@
       }
     }
 
-    // PC用キーボード
-    document.addEventListener("keydown", e => {
-      if (e.code === "Space") {
-        keys.jump = true;
-      }
-      if (e.key === "l" || e.key === "L") {
-        keys.right = true;
-      }
-      if (e.key === "k" || e.key === "K") {
-        keys.left = true;
-      }
+    // ------------------------------------------
+    // 入力関連(PC)
+    // ------------------------------------------
+    document.addEventListener("keydown", (e) => {
+      // 最初のキー入力でBGM開始
+      startBGM();
+
+      if (e.code === "Space")  keys.jump = true;
+      if (e.key === "l" || e.key === "L") keys.right = true;
+      if (e.key === "k" || e.key === "K") keys.left = true;
     });
-    document.addEventListener("keyup", e => {
-      if (e.code === "Space") {
-        keys.jump = false;
-      }
-      if (e.key === "l" || e.key === "L") {
-        keys.right = false;
-      }
-      if (e.key === "k" || e.key === "K") {
-        keys.left = false;
-      }
+    document.addEventListener("keyup", (e) => {
+      if (e.code === "Space")  keys.jump = false;
+      if (e.key === "l" || e.key === "L") keys.right = false;
+      if (e.key === "k" || e.key === "K") keys.left = false;
     });
 
-    // スマホボタン
+    // ------------------------------------------
+    // 入力関連(スマホボタン)
+    // ------------------------------------------
     const leftBtn = document.getElementById("leftBtn");
     const rightBtn = document.getElementById("rightBtn");
     const jumpBtn = document.getElementById("jumpBtn");
 
-    function pressLeft(val)  { keys.left  = val; }
-    function pressRight(val) { keys.right = val; }
-    function pressJump(val)  { keys.jump  = val; }
+    function pressLeft(val)  { keys.left = val; startBGM(); }
+    function pressRight(val) { keys.right = val; startBGM(); }
+    function pressJump(val)  { keys.jump = val; startBGM(); }
 
-    leftBtn.addEventListener("touchstart",  () => pressLeft(true));
-    leftBtn.addEventListener("touchend",    () => pressLeft(false));
-    leftBtn.addEventListener("mousedown",   () => pressLeft(true));
-    leftBtn.addEventListener("mouseup",     () => pressLeft(false));
+    leftBtn.addEventListener("touchstart",  e => { e.preventDefault(); pressLeft(true); });
+    leftBtn.addEventListener("touchend",    e => { e.preventDefault(); pressLeft(false); });
+    leftBtn.addEventListener("mousedown",   e => { e.preventDefault(); pressLeft(true); });
+    leftBtn.addEventListener("mouseup",     e => { e.preventDefault(); pressLeft(false); });
 
-    rightBtn.addEventListener("touchstart", () => pressRight(true));
-    rightBtn.addEventListener("touchend",   () => pressRight(false));
-    rightBtn.addEventListener("mousedown",  () => pressRight(true));
-    rightBtn.addEventListener("mouseup",    () => pressRight(false));
+    rightBtn.addEventListener("touchstart", e => { e.preventDefault(); pressRight(true);});
+    rightBtn.addEventListener("touchend",   e => { e.preventDefault(); pressRight(false);});
+    rightBtn.addEventListener("mousedown",  e => { e.preventDefault(); pressRight(true);});
+    rightBtn.addEventListener("mouseup",    e => { e.preventDefault(); pressRight(false);});
 
-    jumpBtn.addEventListener("touchstart",  () => pressJump(true));
-    jumpBtn.addEventListener("touchend",    () => pressJump(false));
-    jumpBtn.addEventListener("mousedown",   () => pressJump(true));
-    jumpBtn.addEventListener("mouseup",     () => pressJump(false));
+    jumpBtn.addEventListener("touchstart",  e => { e.preventDefault(); pressJump(true); });
+    jumpBtn.addEventListener("touchend",    e => { e.preventDefault(); pressJump(false); });
+    jumpBtn.addEventListener("mousedown",   e => { e.preventDefault(); pressJump(true); });
+    jumpBtn.addEventListener("mouseup",     e => { e.preventDefault(); pressJump(false); });
 
-    // =============================
-    // 更新処理
-    // =============================
+    // ------------------------------------------
+    // BGM再生
+    // ------------------------------------------
+    function startBGM() {
+      if (!bgmStarted) {
+        bgmStarted = true;
+        bgmAudio.currentTime = 0;
+        bgmAudio.play().catch(err => console.log(err));
+      }
+    }
+
+    // ------------------------------------------
+    // ゲームループ関連
+    // ------------------------------------------
     function update() {
       if (!isGameRunning) return;
 
@@ -357,17 +439,19 @@
       if (keys.jump && cat.onGround) {
         cat.vy = JUMP_POWER;
         cat.onGround = false;
+        // ランダムで meow
         if (Math.random() < 0.2) {
           meowSound.currentTime = 0;
           meowSound.play().catch(e => console.log(e));
         }
       }
 
+      // 重力
       cat.vy += GRAVITY;
       cat.x += cat.vx;
       cat.y += cat.vy;
 
-      // 画面左右端
+      // 左右端
       if (cat.x < 0) cat.x = 0;
       else if (cat.x + cat.width > CANVAS_WIDTH) {
         cat.x = CANVAS_WIDTH - cat.width;
@@ -395,24 +479,28 @@
           alert("Game Over...リトライしてね");
           isGameRunning = false;
         } else {
-          cat.x = 160;
-          cat.y = 200;
+          // 再配置
+          cat.x = 160; cat.y = 200;
           cat.vy = 0;
           cat.onGround = false;
         }
       }
 
-      // 上方向に行ったらステージを下げる
+      // 上昇に伴う画面スクロール
       if (cat.y < 200) {
         const diff = 200 - cat.y;
         cat.y = 200;
-        for (let p of platforms) p.y += diff;
-        for (let o of obstacles) o.y += diff;
+        for (let p of platforms) {
+          p.y += diff;
+        }
+        for (let o of obstacles) {
+          o.y += diff;
+        }
         distance += diff;
         addNewPlatformsIfNeeded();
       }
 
-      // 障害物処理
+      // 障害物
       updateObstacles();
 
       // ゴール
@@ -422,9 +510,6 @@
       }
     }
 
-    // =============================
-    // 描画処理
-    // =============================
     function draw() {
       drawBackground();
       drawPlatforms();
@@ -433,18 +518,23 @@
       drawHUD();
     }
 
+    // ------------------------------------------
+    // 背景
+    // ------------------------------------------
     function drawBackground() {
-      // 最初のエリアだけ #f3f4f4
-      let area = getCurrentArea(distance);
+      const area = getCurrentArea(distance);
+
       if (area === "ground") {
-        ctx.fillStyle = "#f3f4f4"; // 要望の色
+        ctx.fillStyle = "#f3f4f4"; 
       } else if (area === "sky") {
         ctx.fillStyle = "#cceeff";
+      } else if (area === "ozone") {
+        ctx.fillStyle = "#88bbff"; 
       } else if (area === "space") {
         ctx.fillStyle = "#303060";
       } else if (area === "rainbow") {
-        let grad = ctx.createLinearGradient(0,0,CANVAS_WIDTH,0);
-        grad.addColorStop(0,   "#ff8a8a"); 
+        let grad = ctx.createLinearGradient(0, 0, CANVAS_WIDTH, 0);
+        grad.addColorStop(0,   "#ff8a8a");
         grad.addColorStop(0.2, "#ffe48a");
         grad.addColorStop(0.4, "#d1ff8a");
         grad.addColorStop(0.6, "#8afff6");
@@ -454,13 +544,30 @@
       } else {
         ctx.fillStyle = "#eaeaea";
       }
+
       ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     }
 
+    // ------------------------------------------
+    // 足場描画 (最終踏み台だけ特別な見た目に)
+    // ------------------------------------------
     function drawPlatforms() {
       for (let p of platforms) {
-        ctx.fillStyle = p.color;
+        // ゴールに近いほど(距離 + (200 - p.y)?) -> もしくは
+        // 簡単に「画面上部(0～100)にある足場かつ distance >= GOAL_DIST - 50」などでチェック
+        let color = p.color;
+
+        // 例えば最終エリアに入り、さらに足場が画面の上の方なら「金色」にする
+        if (distance > (GOAL_DIST - 100)) {
+          if (p.y < 120) {
+            color = "gold";
+          }
+        }
+
+        // 足場
+        ctx.fillStyle = color;
         ctx.fillRect(p.x, p.y, p.width, p.height);
+
         // 支柱
         let cx = p.x + p.width/2 - TOWER_COLUMN_WIDTH/2;
         let cy = p.y;
@@ -468,6 +575,9 @@
       }
     }
 
+    // ------------------------------------------
+    // 障害物描画
+    // ------------------------------------------
     function drawObstacles() {
       ctx.font = "28px serif";
       ctx.textBaseline = "top";
@@ -476,15 +586,17 @@
       }
     }
 
+    // ------------------------------------------
+    // 猫描画
+    // ------------------------------------------
     function drawCat() {
       const catEmoji = "🐈";
       ctx.save();
       ctx.font = "38px serif";
       ctx.textBaseline = "top";
 
-      // ずれ防止
       let drawX = cat.x;
-      let drawY = cat.y - 6; 
+      let drawY = cat.y - 6; // 浮きを抑える
 
       if (!cat.facingRight) {
         ctx.translate(drawX, drawY);
@@ -497,31 +609,33 @@
       ctx.restore();
     }
 
+    // ------------------------------------------
+    // HUD (距離, ライフ)
+    // ------------------------------------------
     function drawHUD() {
       ctx.fillStyle = "#000";
       ctx.font = "16px sans-serif";
       ctx.fillText(`Height: ${Math.floor(distance)}`, 10, 10);
 
       // ライフ(🐟)
-      let fishX = 10, fishY = 30;
       for (let i = 0; i < lives; i++) {
-        ctx.fillText("🐟", fishX + i*25, fishY);
+        ctx.fillText("🐟", 10 + i*25, 30);
       }
     }
 
-    // =============================
-    // メインループ
-    // =============================
+    // ------------------------------------------
+    // ゲームループ
+    // ------------------------------------------
     function gameLoop() {
-      frameCount++;
-      update();
-      ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      draw();
       if (isGameRunning) {
+        update();
+        ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        draw();
         requestAnimationFrame(gameLoop);
       }
     }
 
+    // 初期化
     initPlatforms();
     gameLoop();
   </script>
