@@ -4,131 +4,247 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Aquarium – Feed, Breed, Shark Hunt</title>
-<style>html,body{margin:0;padding:0;overflow:hidden;background:#000;color:#fff;font-family:sans-serif}#info{position:fixed;top:0;left:0;padding:6px 10px;font-size:12px;opacity:.8}#sharkBtn{position:fixed;top:6px;right:6px;font-size:24px;padding:4px 10px;border:none;background:#ff5050;border-radius:6px;color:#fff;cursor:pointer;user-select:none}#sharkBtn:active{transform:scale(.94)}</style>
-<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.161.0/build/three.module.js"}}</script>
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#000;color:#fff;font-family:sans-serif}
+  #info{position:fixed;top:0;left:0;padding:6px 10px;font-size:12px;opacity:.8}
+  #sharkBtn{position:fixed;top:6px;right:6px;font-size:24px;padding:4px 10px;border:none;background:#ff5050;border-radius:6px;color:#fff;cursor:pointer}
+  #sharkBtn:active{transform:scale(.94)}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.161.0/build/three.module.js"}}
+</script>
 </head>
 <body>
-<div id="info">ダブルタップ/ダブルクリック = エサ投入 ｜ 🦈ボタン = サメ投入</div>
+<div id="info">ダブルタップ/クリック = エサ ｜ 🦈 = サメ</div>
 <button id="sharkBtn">🦈</button>
+
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'https://unpkg.com/three@0.161.0/examples/jsm/controls/OrbitControls.js';
 
-// ===== Clock & Params =====
-const clock=new THREE.Clock();
-const BOUND=5, NUM_FISH=30, BUBBLE_COUNT=150;
-const COLORS=[0xff4040,0x4080ff,0xffd23c,0x40ff88,0xff8fe8];
-const SHARK_SCALE = 1.4; 
-const FEAR2=4, EAT2=0.36, ATTRACT2=9, BABY_SCALE=0.4, GROW=60;
+/* === タンク寸法 & パラメータ === */
+const TANK_W = 10,  TANK_H = 6, TANK_D = 10;          // ← 好きに調整
+const HALF_W = TANK_W * 0.5, HALF_H = TANK_H * 0.5, HALF_D = TANK_D * 0.5;
 
-// ===== Scene =====
-const renderer=new THREE.WebGLRenderer({antialias:true});
-renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+const clock = new THREE.Clock();
+const NUM_FISH = 30, BUBBLE_COUNT = 150;
+const COLORS = [0xff4040,0x4080ff,0xffd23c,0x40ff88,0xff8fe8];
+const SHARK_SCALE = 1.4, MAX_PELLETS = 10;
+const FEAR2 = 4, EAT2 = 0.36, ATTRACT2 = 9, BABY_SCALE = 0.4, GROW = 60;
+const rnd = (a,b)=>a+(b-a)*Math.random();
+const dummy = new THREE.Object3D();
+
+/* === シーン === */
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 renderer.setSize(innerWidth,innerHeight);
-renderer.outputEncoding=THREE.sRGBEncoding;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
-const scene=new THREE.Scene();scene.background=new THREE.Color(0x2294af);
-const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,0.1,60);
-camera.position.set(0,0,1);
-const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x2294af);
+
+const camera = new THREE.PerspectiveCamera(50,innerWidth/innerHeight,0.1,60);
+camera.position.set(0,0,3);          // ★必ず水槽内
+const controls = new OrbitControls(camera,renderer.domElement);
+controls.enableDamping = true;
+
 scene.add(new THREE.AmbientLight(0x406080,1));
-const sun=new THREE.DirectionalLight(0xffffff,2);sun.position.set(0,8,0);scene.add(sun);
+const sun = new THREE.DirectionalLight(0xffffff,2);
+sun.position.set(0,8,0); scene.add(sun);
 
-// ===== Data =====
-const fishes=[],pellets=[],sharks=[];
-const rand=(a,b)=>a+(b-a)*Math.random();
-const dummy=new THREE.Object3D();
+/* === ガラス水槽 === */
+const glassGeo = new THREE.BoxGeometry(TANK_W, TANK_H, TANK_D);
+glassGeo.scale(-1,1,1);
+const glassMat = new THREE.MeshPhysicalMaterial({
+  transparent:true, opacity:.15, transmission:1, thickness:.12, side:THREE.BackSide,
+depthWrite:false
+});
+scene.add(new THREE.Mesh(glassGeo, glassMat));
 
-// ===== Fish =====
+/* === 配列 === */
+const fishes=[], pellets=[], sharks=[];
+
+/* === 魚生成 === */
 function addFish(scale=1){
- const color=COLORS[Math.random()*COLORS.length|0];
- const mat=new THREE.MeshStandardMaterial({color,roughness:0.5});
- const body=new THREE.Mesh(new THREE.BoxGeometry(0.6,0.3,0.3),mat);
- const tail=new THREE.Mesh(new THREE.BoxGeometry(0.25,0.25,0.02),mat);tail.position.x=-0.45;
- const g=new THREE.Group();g.add(body);g.add(tail);
- g.scale.setScalar(scale);
- g.position.set(rand(-BOUND,BOUND),rand(-BOUND*0.6,BOUND*0.6),rand(-BOUND,BOUND));
- g.userData={isFish:true,birth:clock.getElapsedTime(),isBaby:scale<1,dir:new THREE.Vector3(rand(-1,1),rand(-0.3,0.3),rand(-1,1)).normalize(),speed:rand(0.4,0.9)*(scale<1?0.7:1),phase:Math.random()*Math.PI*2,scaredUntil:0};
- g.userData.origSpeed=g.userData.speed;
- scene.add(g);fishes.push(g);
+  const col = COLORS[Math.random()*COLORS.length|0];
+  const mat = new THREE.MeshStandardMaterial({color:col,roughness:0.5});
+  const body=new THREE.Mesh(new THREE.BoxGeometry(.6,.3,.3),mat);
+  const tail=new THREE.Mesh(new THREE.BoxGeometry(.25,.25,.02),mat);tail.position.x=-.45;
+
+  const g=new THREE.Group(); g.add(body); g.add(tail);
+  g.scale.setScalar(scale);
+  g.position.set(rnd(-HALF_W,HALF_W), rnd(-HALF_H,HALF_H), rnd(-HALF_D,HALF_D));
+  g.userData={isFish:true,birth:clock.getElapsedTime(),isBaby:scale<1,
+    dir:new THREE.Vector3(rnd(-1,1),rnd(-.3,.3),rnd(-1,1)).normalize(),
+    speed:rnd(.4,.9)*(scale<1?.7:1),
+    phase:Math.random()*Math.PI*2,
+    scaredUntil:0,
+    origSpeed:null};
+  g.userData.origSpeed=g.userData.speed;
+  scene.add(g); fishes.push(g);
 }
-for(let i=0;i<NUM_FISH;i++)addFish();
+for(let i=0;i<NUM_FISH;i++) addFish();
 
-// ===== Bubbles =====
-const bubbleGeo=new THREE.BoxGeometry(0.08,0.1,0.08);
-const bubbleMat=new THREE.MeshStandardMaterial({color:0xffffff,transparent:true,opacity:0.7});
-const bubbles=new THREE.InstancedMesh(bubbleGeo,bubbleMat,BUBBLE_COUNT);scene.add(bubbles);
-const bubbleInfo=[];
-function upBub(i){dummy.position.set(bubbleInfo[i].x,bubbleInfo[i].y,bubbleInfo[i].z);dummy.scale.setScalar(0.3);dummy.updateMatrix();bubbles.setMatrixAt(i,dummy.matrix);}for(let i=0;i<BUBBLE_COUNT;i++){bubbleInfo.push({x:rand(-BOUND,BOUND),y:rand(-BOUND*0.6,BOUND*0.6),z:rand(-BOUND,BOUND),speed:rand(0.01,0.03)});upBub(i);}bubbles.instanceMatrix.needsUpdate=true;
+/* === 泡 === */
+const bubGeo=new THREE.BoxGeometry(.08,.1,.08);
+const bubMat=new THREE.MeshStandardMaterial({color:0xffffff,transparent:true,opacity:.7});
+const bubbles=new THREE.InstancedMesh(bubGeo,bubMat,BUBBLE_COUNT);
+scene.add(bubbles);
 
-// ===== Pellets =====
-const pelletGeo=new THREE.BoxGeometry(0.12,0.12,0.12),pelletMat=new THREE.MeshStandardMaterial({color:0x8b4513});
-function spawnPellet(pos){const p=new THREE.Mesh(pelletGeo,pelletMat.clone());p.position.copy(pos);scene.add(p);pellets.push(p);setTimeout(()=>{scene.remove(p);pellets.splice(pellets.indexOf(p),1)},15000);}  
-
-// ===== Shark =====
-function spawnShark(){   
- const dir=camera.getWorldDirection(new THREE.Vector3());
- const pos=camera.position.clone().add(dir.multiplyScalar(2));
- if(pos.length()>BOUND-1)pos.clampLength(0,BOUND-1);
- const mat=new THREE.MeshStandardMaterial({color:0x666666,roughness:0.4,metalness:0.3});
- const body=new THREE.Mesh(new THREE.BoxGeometry(0.9,0.35,0.3),mat);
- const tail=new THREE.Mesh(new THREE.BoxGeometry(0.3,0.3,0.02),mat);tail.position.x=-0.6;
- const spikeGeo=new THREE.ConeGeometry(0.06,0.18,4);
- const shark=new THREE.Group();shark.add(body);shark.add(tail);
- for(let i=-1;i<=1;i++){const sp=new THREE.Mesh(spikeGeo,mat);sp.position.set(0.25,0.18,0.08*i);sp.rotation.z=Math.PI;shark.add(sp);}  
-shark.scale.setScalar(SHARK_SCALE);
-shark.position.copy(pos);
- shark.userData={dir:new THREE.Vector3(rand(-1,1),rand(-0.2,0.2),rand(-1,1)).normalize()};
- scene.add(shark);sharks.push(shark);
- setTimeout(()=>{scene.remove(shark);sharks.splice(sharks.indexOf(shark),1)},15000);
+const bubInfo=[];
+function upB(i){
+  dummy.position.set(bubInfo[i].x,bubInfo[i].y,bubInfo[i].z);
+  dummy.scale.setScalar(.3);
+  dummy.updateMatrix();
+  bubbles.setMatrixAt(i,dummy.matrix);
 }
-document.getElementById('sharkBtn').addEventListener('click',spawnShark);
+for(let i=0;i<BUBBLE_COUNT;i++){
+  bubInfo.push({x:rnd(-HALF_W,HALF_W), y:rnd(-HALF_H,HALF_H), z:rnd(-HALF_D,HALF_D), speed:rnd(.01,.03)});
+  upB(i);
+}
+bubbles.instanceMatrix.needsUpdate=true;
 
-// ===== Interaction =====
-const raycaster=new THREE.Raycaster();const pointer=new THREE.Vector2();let lastTap=0;const active=new Set();
-const dom=renderer.domElement;
-dom.addEventListener('pointerdown',e=>{
- active.add(e.pointerId);
- pointer.x=(e.clientX/innerWidth)*2-1;pointer.y=-(e.clientY/innerHeight)*2+1;
- raycaster.setFromCamera(pointer,camera);
- const hit=raycaster.intersectObjects(fishes,true);if(hit.length){let o=hit[0].object;while(o&&!o.userData.isFish)o=o.parent;if(o)scare(o);}  
- const now=performance.now();
- if(active.size===1&&now-lastTap<300){const pos=raycaster.ray.origin.clone().add(raycaster.ray.direction.clone().multiplyScalar(1));spawnPellet(pos);}lastTap=now;});
-['pointerup','pointercancel'].forEach(evt=>dom.addEventListener(evt,e=>active.delete(e.pointerId)));
-dom.addEventListener('dblclick',e=>e.preventDefault());
-function scare(f){const now=clock.getElapsedTime();f.userData.dir.add(new THREE.Vector3(rand(-1,1),rand(-0.4,0.4),rand(-1,1))).normalize();f.userData.speed*=3;f.userData.scaredUntil=now+2.5;}
+/* === エサ === */
+const pelGeo=new THREE.BoxGeometry(.12,.12,.12);
+const pelMat=new THREE.MeshStandardMaterial({color:0x8b4513});
+function spawnPellet(pos){
+  if(pellets.length>=MAX_PELLETS){const old=pellets.shift();scene.remove(old);}
+  const m=new THREE.Mesh(pelGeo,pelMat.clone());
+  m.position.copy(pos); scene.add(m); pellets.push(m);
+  setTimeout(()=>{scene.remove(m);pellets.splice(pellets.indexOf(m),1);},15000);
+}
 
-// ===== Main Loop =====
-function animate(){requestAnimationFrame(animate);
- const dt=clock.getDelta(),t=clock.getElapsedTime();
- // fish
- fishes.forEach(f=>{
-  const ud=f.userData;
-  if(ud.isBaby&&t-ud.birth>GROW){f.scale.setScalar(1);ud.isBaby=false;ud.speed*=1.4;ud.origSpeed=ud.speed;}
-  sharks.forEach(s=>{if(f.position.distanceToSquared(s.position)<FEAR2)ud.dir.add(f.position.clone().sub(s.position).normalize()).normalize();});
-  if(pellets.length){let cl=null,d=Infinity;pellets.forEach(p=>{const d2=f.position.distanceToSquared(p.position);if(d2<d){d=d2;cl=p;}});if(cl&&d<ATTRACT2)ud.dir.lerp(cl.position.clone().sub(f.position).normalize(),0.05);}  
-  if(t>ud.scaredUntil&&ud.speed>ud.origSpeed)ud.speed=THREE.MathUtils.lerp(ud.speed,ud.origSpeed,0.05);
-  f.position.addScaledVector(ud.dir,ud.speed*dt);
-  if(f.position.length()>BOUND){ud.dir.multiplyScalar(-1);f.position.clampLength(0,BOUND);}
-  f.rotation.y=Math.atan2(-ud.dir.z,ud.dir.x)+Math.sin(ud.phase+t*4)*0.2;
-  f.position.y+=Math.sin(t*4+ud.phase)*0.002;
- });
- // pellets
- for(let i=pellets.length-1;i>=0;i--){const p=pellets[i];p.position.y-=0.8*dt;if(p.position.y<-BOUND*0.6){scene.remove(p);pellets.splice(i,1);continue;}for(const f of fishes){if(f.position.distanceToSquared(p.position)<EAT2){scene.remove(p);pellets.splice(i,1);addFish(BABY_SCALE);break;}}}
- // sharks
- sharks.forEach(s=>{
-  if(fishes.length){let cl=null,d=Infinity;fishes.forEach(f=>{const d2=s.position.distanceToSquared(f.position);if(d2<d){d=d2;cl=f;}});if(cl){s.userData.dir.lerp(cl.position.clone().sub(s.position).normalize(),0.05);if(d<EAT2){scene.remove(cl);fishes.splice(fishes.indexOf(cl),1);}}}
-  s.position.addScaledVector(s.userData.dir,2*dt);
-  if(s.position.length()>BOUND)s.userData.dir.multiplyScalar(-1);
- });
- // bubbles
- for(let i=0;i<BUBBLE_COUNT;i++){bubbleInfo[i].y+=bubbleInfo[i].speed;if(bubbleInfo[i].y>BOUND*0.6){bubbleInfo[i].y=-BOUND*0.6;bubbleInfo[i].x=rand(-BOUND,BOUND);bubbleInfo[i].z=rand(-BOUND,BOUND);}upBub(i);}bubbles.instanceMatrix.needsUpdate=true;
- controls.update();renderer.render(scene,camera);
+/* === サメ === */
+function spawnShark(){
+  const dir=camera.getWorldDirection(new THREE.Vector3());
+  const pos=camera.position.clone().add(dir.multiplyScalar(2));
+  pos.x = THREE.MathUtils.clamp(pos.x,-HALF_W+1, HALF_W-1);
+  pos.y = THREE.MathUtils.clamp(pos.y,-HALF_H+1, HALF_H-1);
+  pos.z = THREE.MathUtils.clamp(pos.z,-HALF_D+1, HALF_D-1);
+
+  const mat=new THREE.MeshStandardMaterial({color:0x666666,roughness:.4,metalness:.3});
+  const body=new THREE.Mesh(new THREE.BoxGeometry(.9,.35,.3),mat);
+  const tail=new THREE.Mesh(new THREE.BoxGeometry(.3,.3,.02),mat); tail.position.x=-.6;
+  const spikeGeo=new THREE.ConeGeometry(.06,.18,4);
+  const shark=new THREE.Group(); shark.add(body); shark.add(tail);
+  for(let i=-1;i<=1;i++){const sp=new THREE.Mesh(spikeGeo,mat); sp.position.set(.25,.18,.08*i); sp.rotation.z=Math.PI; shark.add(sp);}
+  shark.scale.setScalar(SHARK_SCALE);
+  shark.position.copy(pos);
+  shark.userData={dir:new THREE.Vector3(rnd(-1,1),rnd(-.2,.2),rnd(-1,1)).normalize()};
+  scene.add(shark); sharks.push(shark);
+  setTimeout(()=>{scene.remove(shark);sharks.splice(sharks.indexOf(shark),1);},15000);
+}
+sharkBtn.addEventListener('click',spawnShark);
+
+/* === 操作 === */
+const rc=new THREE.Raycaster(),pt=new THREE.Vector2();
+let lastTap=0; const act=new Set();
+function scare(f){const n=clock.getElapsedTime();f.userData.dir.add(new THREE.Vector3(rnd(-1,1),rnd(-.4,.4),rnd(-1,1))).normalize();f.userData.speed*=3;f.userData.scaredUntil=n+2.5;}
+renderer.domElement.addEventListener('pointerdown',e=>{
+  act.add(e.pointerId);
+  pt.x=(e.clientX/innerWidth)*2-1; pt.y=-(e.clientY/innerHeight)*2+1;
+  rc.setFromCamera(pt,camera);
+  const hit=rc.intersectObjects(fishes,true);
+  if(hit.length){let o=hit[0].object;while(o&&!o.userData.isFish)o=o.parent;if(o)scare(o);}
+  const now=performance.now();
+  if(act.size===1 && now-lastTap<300){
+    spawnPellet(new THREE.Vector3(0, HALF_H-0.2, 0));   // 天井近く
+  }
+  lastTap=now;
+});
+['pointerup','pointercancel'].forEach(ev=>renderer.domElement.addEventListener(ev,e=>act.delete(e.pointerId)));
+renderer.domElement.addEventListener('dblclick',e=>e.preventDefault());
+
+/* === ループ === */
+function animate(){
+  requestAnimationFrame(animate);
+  const dt=clock.getDelta(), t=clock.getElapsedTime();
+
+  /* --- 魚 --- */
+  fishes.forEach(f=>{
+    const u=f.userData;
+    if(u.isBaby&&t-u.birth>GROW){f.scale.setScalar(1);u.isBaby=false;u.speed*=1.4;u.origSpeed=u.speed;}
+
+    sharks.forEach(s=>{
+      if(f.position.distanceToSquared(s.position)<FEAR2)
+        u.dir.add(f.position.clone().sub(s.position).normalize()).normalize();
+    });
+
+    if(pellets.length){
+      let closest=null,dMin=Infinity;
+      pellets.forEach(p=>{const d2=f.position.distanceToSquared(p.position);if(d2<dMin){dMin=d2;closest=p;}});
+      if(closest&&dMin<ATTRACT2)
+        u.dir.lerp(closest.position.clone().sub(f.position).normalize(),0.05);
+    }
+
+    if(t>u.scaredUntil&&u.speed>u.origSpeed)
+      u.speed=THREE.MathUtils.lerp(u.speed,u.origSpeed,0.05);
+
+    f.position.addScaledVector(u.dir,u.speed*dt);
+
+    /* 直方体境界反射 */
+    if(Math.abs(f.position.x)>HALF_W){u.dir.x*=-1;f.position.x=THREE.MathUtils.clamp(f.position.x,-HALF_W,HALF_W);}
+    if(Math.abs(f.position.y)>HALF_H){u.dir.y*=-1;f.position.y=THREE.MathUtils.clamp(f.position.y,-HALF_H,HALF_H);}
+    if(Math.abs(f.position.z)>HALF_D){u.dir.z*=-1;f.position.z=THREE.MathUtils.clamp(f.position.z,-HALF_D,HALF_D);}
+
+    f.rotation.y=Math.atan2(-u.dir.z,u.dir.x)+Math.sin(u.phase+t*4)*0.2;
+    f.position.y+=Math.sin(t*4+u.phase)*0.002;
+  });
+
+  /* --- エサ --- */
+  for(let i=pellets.length-1;i>=0;i--){
+    const p=pellets[i]; p.position.y-=0.8*dt;
+    if(p.position.y<-HALF_H){
+      scene.remove(p); pellets.splice(i,1); continue;
+    }
+    for(const f of fishes){
+      if(f.position.distanceToSquared(p.position)<EAT2){
+        scene.remove(p); pellets.splice(i,1); addFish(BABY_SCALE); break;
+      }
+    }
+  }
+
+  /* --- サメ --- */
+  sharks.forEach(s=>{
+    if(fishes.length){
+      let closest=null,dMin=Infinity;
+      fishes.forEach(f=>{const d2=s.position.distanceToSquared(f.position);if(d2<dMin){dMin=d2;closest=f;}});
+      if(closest){
+        s.userData.dir.lerp(closest.position.clone().sub(s.position).normalize(),0.05);
+        if(dMin<EAT2){scene.remove(closest);fishes.splice(fishes.indexOf(closest),1);}
+      }
+    }
+    s.position.addScaledVector(s.userData.dir,2*dt);
+
+    /* 反射 */
+    if(Math.abs(s.position.x)>HALF_W){s.userData.dir.x*=-1;}
+    if(Math.abs(s.position.y)>HALF_H){s.userData.dir.y*=-1;}
+    if(Math.abs(s.position.z)>HALF_D){s.userData.dir.z*=-1;}
+  });
+
+  /* --- 泡 --- */
+  for(let i=0;i<BUBBLE_COUNT;i++){
+    const info=bubInfo[i]; info.y+=info.speed;
+    if(info.y>HALF_H){
+      info.y=-HALF_H;
+      info.x=rnd(-HALF_W,HALF_W); info.z=rnd(-HALF_D,HALF_D);
+    }
+    upB(i);
+  }
+  bubbles.instanceMatrix.needsUpdate=true;
+
+  controls.update();
+  renderer.render(scene,camera);
 }
 animate();
 
-// ===== Resize =====
-addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+/* === リサイズ === */
+addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
 </script>
 </body>
 </html>
