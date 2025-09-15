@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Gyro Hourglass – Realistic</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:system-ui, -apple-system, Segoe UI, Roboto;}
+  #ui{
+    position:fixed;left:12px;top:12px;z-index:10;display:flex;gap:8px;align-items:center;
+    background:rgba(0,0,0,.4);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.15);
+    border-radius:12px;padding:10px 12px;color:#fff
+  }
+  #btnGyro{
+    border:1px solid rgba(255,255,255,.3); border-radius:10px; padding:8px 12px; cursor:pointer;
+    background:linear-gradient(180deg, rgba(255,255,255,.15), rgba(255,255,255,.05));
+  }
+  #hint{font-size:12px;opacity:.8}
+  #debug{position:fixed;right:10px;bottom:10px;color:#9ad;opacity:.6;font-size:11px}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<div id="ui">
+  <button id="btnGyro">Gyro ON</button>
+  <div id="hint">iOSはまずこれをタップ → 端末を逆さにしてね</div>
+</div>
+<div id="debug"></div>
+
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+<script src="https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js"></script>
+<script>
+(()=>{
+// ====== 基本セットアップ ======
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.05, 200);
+camera.position.set(0, 0.75, 2.1);
+
+// フォールバック用操作（ジャイロOFFでも遊べる）
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enablePan = false;
+controls.enableDamping = true;
+controls.minDistance = 1.4;
+controls.maxDistance = 3.5;
+
+// 環境ライティング
+const hemi = new THREE.HemisphereLight(0xffffff, 0x223344, 0.8);
+scene.add(hemi);
+const dir = new THREE.DirectionalLight(0xffffff, 1.1);
+dir.position.set(2,2,2);
+scene.add(dir);
+
+// 環境マップ風（手軽なグラデシェーダで反射感）
+const envTex = new THREE.CubeTextureLoader().load([
+  'https://threejs.org/examples/textures/cube/Bridge2/posx.jpg',
+  'https://threejs.org/examples/textures/cube/Bridge2/negx.jpg',
+  'https://threejs.org/examples/textures/cube/Bridge2/posy.jpg',
+  'https://threejs.org/examples/textures/cube/Bridge2/negy.jpg',
+  'https://threejs.org/examples/textures/cube/Bridge2/posz.jpg',
+  'https://threejs.org/examples/textures/cube/Bridge2/negz.jpg',
+]);
+scene.environment = envTex;
+
+// ====== 砂時計のガラス ======
+const glass = new THREE.Group();
+scene.add(glass);
+
+// 上下の“球殻”＋首のチューブで簡易形状
+const glassMat = new THREE.MeshPhysicalMaterial({
+  color: 0xffffff,
+  metalness: 0,
+  roughness: 0.08,
+  transmission: 1,        // 透明（屈折ぽい）
+  thickness: 0.4,         // ガラス厚み
+  envMapIntensity: 1.2,
+  clearcoat: 1,
+  clearcoatRoughness: 0.1,
+  reflectivity: 0.2,
+  ior: 1.45
+});
+
+const R = 0.52;             // 球半径
+const shellT = 0.02;        // 壁厚
+const topGeo = new THREE.SphereGeometry(R, 48, 48, 0, Math.PI*2, 0, Math.PI/2);
+const botGeo = new THREE.SphereGeometry(R, 48, 48, 0, Math.PI*2, Math.PI/2, Math.PI/2);
+const topShell = new THREE.Mesh(topGeo, glassMat);
+const botShell = new THREE.Mesh(botGeo, glassMat);
+topShell.position.y = 0.45;
+botShell.position.y = -0.45;
+
+const neckR = 0.06;         // 首の半径
+const neckH = 0.14;         // 首高さ
+const neckGeo = new THREE.CylinderGeometry(neckR, neckR, neckH, 48, 1, true);
+const neck = new THREE.Mesh(neckGeo, glassMat);
+
+glass.add(topShell, botShell, neck);
+
+// ちょい台座
+const baseMat = new THREE.MeshStandardMaterial({color:0x111317, roughness:0.7, metalness:0.3});
+const base = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.05, 0.06, 64), baseMat);
+base.position.y = -0.9;
+scene.add(base);
+
+// ====== 砂パーティクル ======
+// シェーダでキラキラ演出（点スプライト＋乱数きらめき）
+const sandCount = 16000;           // 粒数（端末負荷に応じて増減）
+const positions = new Float32Array(sandCount*3);
+const seeds = new Float32Array(sandCount);  // きらめき乱数
+const states = new Float32Array(sandCount); // 0=上の部屋, 1=下の部屋（所属）
+
+// 初期化：上部に砂を多め
+for(let i=0;i<sandCount;i++){
+  // 球内ランダム（上部）
+  const r = (Math.cbrt(Math.random())* (R-0.06));
+  const theta = Math.random()*Math.PI*2;
+  const phi = Math.random()*Math.PI/2 * (0.9); // 上半球の下寄りに偏らせる
+  const x = r * Math.cos(theta)*Math.sin(phi);
+  const y = Math.abs(r * Math.cos(phi)) + 0.02; // 上なので＋
+  const z = r * Math.sin(theta)*Math.sin(phi);
+  positions[i*3+0]=x;
+  positions[i*3+1]=y+0.2;
+  positions[i*3+2]=z;
+  seeds[i] = Math.random();
+  states[i]=0;
+}
+
+const sandGeo = new THREE.BufferGeometry();
+sandGeo.setAttribute('position', new THREE.BufferAttribute(positions,3));
+sandGeo.setAttribute('seed', new THREE.BufferAttribute(seeds,1));
+sandGeo.setAttribute('state', new THREE.BufferAttribute(states,1));
+
+const sandVert = `
+  attribute float seed;
+  attribute float state;
+  varying float vTwinkle;
+  void main(){
+    vTwinkle = fract(sin(seed*43758.5453 + (float(gl_InstanceID) * 0.0))*43758.5453);
+    gl_PointSize = 1.7 + vTwinkle*1.2;
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+  }
+`;
+const sandFrag = `
+  precision mediump float;
+  varying float vTwinkle;
+  void main(){
+    // 丸い点に
+    vec2 p = gl_PointCoord - vec2(0.5);
+    float d = dot(p,p);
+    if(d>0.25) discard;
+
+    // キラっと中心ほど明るい
+    float glow = smoothstep(0.25,0.0,d);
+    float sparkle = 0.6 + vTwinkle*0.4;
+    vec3 col = mix(vec3(0.8,0.85,1.0), vec3(1.0,0.9,0.75), sparkle);
+    col *= (1.0 + 0.6*glow);
+    gl_FragColor = vec4(col, 0.95);
+  }
+`;
+
+const sandMat = new THREE.ShaderMaterial({
+  vertexShader: sandVert,
+  fragmentShader: sandFrag,
+  transparent:true,
+  blending: THREE.AdditiveBlending,
+  depthWrite:false
+});
+const sand = new THREE.Points(sandGeo, sandMat);
+sand.renderOrder = 2;
+scene.add(sand);
+
+// ====== 物理もどき：重力＋境界＆ネック通過 ======
+let g = new THREE.Vector3(0,-1,0);     // 重力方向（端末傾きで更新）
+const tmp = new THREE.Vector3();
+const neckY = 0.0;
+const neckRadius = neckR * 0.92;
+const flowRateBase = 0.0026;           // くびれ通過率の基準（見た目優先）
+const bounce = 0.15;
+const wallDamp = 0.8;
+
+const velocities = new Float32Array(sandCount*3);
+const posAttr = sand.geometry.getAttribute('position');
+const stateAttr = sand.geometry.getAttribute('state');
+
+function step(dt){
+  // dtを上限
+  dt = Math.min(dt, 0.033);
+
+  // 上下の“球”境界に収める関数（簡易）
+  function clampToBulb(ix, top){
+    const x = positions[ix], y = positions[ix+1], z = positions[ix+2];
+    const centerY = top ? 0.45 : -0.45;
+    const relY = y - centerY;
+    const dist = Math.sqrt(x*x + z*z + relY*relY);
+    if(dist > (R - 0.012)){
+      const scale = (R - 0.012) / dist;
+      positions[ix]   *= scale;
+      positions[ix+1] = centerY + relY*scale;
+      positions[ix+2] *= scale;
+      velocities[ix]   *= wallDamp;
+      velocities[ix+1] *= wallDamp;
+      velocities[ix+2] *= wallDamp;
+    }
+  }
+
+  // ネック周辺チェック
+  function canPassThroughNeck(x,y,z){
+    // 首の円柱内に入ったら通過対象
+    if(Math.abs(y - neckY) < (neckH*0.6)){
+      const r2 = x*x + z*z;
+      return r2 < (neckRadius*neckRadius);
+    }
+    return false;
+  }
+
+  // gravityの強さ
+  const gMag = 5.5;
+
+  // 現在の上下の向き（g.yの符号でざっくり判定）
+  const upsideDown = (g.y > 0);
+
+  // ネックの流量：縦に近いほど速く、傾くと遅く
+  const verticality = Math.abs(g.dot(new THREE.Vector3(0,-1,0))); // 下向き成分
+  const flowRate = flowRateBase * (0.4 + 0.6*verticality);
+
+  for(let i=0;i<sandCount;i++){
+    const ix = i*3;
+
+    // 加速
+    velocities[ix  ] += g.x * gMag * dt;
+    velocities[ix+1] += g.y * gMag * dt;
+    velocities[ix+2] += g.z * gMag * dt;
+
+    // 位置更新
+    positions[ix  ] += velocities[ix  ] * dt;
+    positions[ix+1] += velocities[ix+1] * dt;
+    positions[ix+2] += velocities[ix+2] * dt;
+
+    // どっちの部屋所属か
+    let topSide = (stateAttr.getX(i)===0);
+
+    // ネック通過（所属切替）
+    if(canPassThroughNeck(positions[ix], positions[ix+1], positions[ix+2])){
+      // “下向き側”へ確率的に送る（見た目安定のため）
+      const toBottom = (!upsideDown); // 端末が普通向きなら下へ
+      const rnd = Math.random();
+      if(rnd < flowRate){
+        // yをネックを少し越えた位置にワープ（詰まり防止）
+        if(toBottom && topSide){
+          positions[ix+1] = -0.02;
+          stateAttr.setX(i, 1); // 下部屋へ
+          topSide = false;
+        }else if(!toBottom && !topSide){
+          positions[ix+1] = +0.02;
+          stateAttr.setX(i, 0); // 上部屋へ
+          topSide = true;
+        }
+      }
+    }
+
+    // 下側の“床”で簡易衝突（砂山っぽく減速）
+    if(topSide){
+      // 上の部屋の上限/側面
+      clampToBulb(ix, true);
+    }else{
+      // 下の部屋の境界
+      clampToBulb(ix, false);
+    }
+
+    // ゆるい減衰
+    velocities[ix  ] *= 0.998;
+    velocities[ix+1] *= 0.998;
+    velocities[ix+2] *= 0.998;
+
+    // 首に当たって跳ねる感じを少し
+    if(Math.abs(positions[ix+1] - neckY) < (neckH*0.52)){
+      const r = Math.hypot(positions[ix], positions[ix+2]);
+      if(r > neckRadius && r < neckRadius*1.05){
+        // 外へ少し押し返してバウンド
+        const nx = positions[ix]/r, nz = positions[ix+2]/r;
+        velocities[ix]   += nx * bounce;
+        velocities[ix+2] += nz * bounce;
+      }
+    }
+  }
+
+  posAttr.needsUpdate = true;
+  stateAttr.needsUpdate = true;
+}
+
+// ====== ジャイロ連携 ======
+let haveGyro = false;
+const btn = document.getElementById('btnGyro');
+const dbg = document.getElementById('debug');
+
+function setGravityFromEuler(alpha,beta,gamma){
+  // alpha:Z, beta:X(前後), gamma:Y(左右)
+  // 端末座標→ワールド近似
+  const bx = beta  * Math.PI/180;
+  const gy = gamma * Math.PI/180;
+
+  // 簡易：端末の傾きから重力方向ベクトルを推定
+  // 下方向がどこかを trig で近似（十分リアルに感じる）
+  const sx = Math.sin(bx), cx = Math.cos(bx);
+  const sy = Math.sin(gy), cy = Math.cos(gy);
+
+  // 下向きベクトル（端末座標基準）をワールドに
+  const gx = sy;
+  const gyw = -sx;
+  const gz = -cy*cx + 0.0; // 簡易
+
+  g.set(gx, gyw, gz).normalize();
+}
+
+async function enableGyro(){
+  try{
+    if(typeof DeviceOrientationEvent !== 'undefined' &&
+       typeof DeviceOrientationEvent.requestPermission === 'function'){
+      const resp = await DeviceOrientationEvent.requestPermission();
+      if(resp !== 'granted'){ alert('端末の「動作と向き」アクセスが拒否されました。'); return; }
+    }
+    window.addEventListener('deviceorientation', (e)=>{
+      const a = e.alpha??0, b = e.beta??0, c = e.gamma??0;
+      setGravityFromEuler(a,b,c);
+      haveGyro = true;
+    }, true);
+    btn.textContent = 'Gyro ON ✔';
+    document.getElementById('hint').textContent = '端末を傾けて遊べます（逆さで砂が反転）';
+  }catch(err){
+    console.warn(err);
+    alert('センサー取得に失敗しました');
+  }
+}
+btn.addEventListener('click', enableGyro);
+
+// マウス/タッチ操作で重力を擬似（フォールバック）
+let dragging=false, lx=0, ly=0, tiltX=0, tiltY=0;
+function onPointerDown(e){ dragging=true; lx=e.clientX??e.touches[0].clientX; ly=e.clientY??e.touches[0].clientY; }
+function onPointerMove(e){
+  if(!dragging || haveGyro) return;
+  const x=(e.clientX??e.touches[0].clientX), y=(e.clientY??e.touches[0].clientY);
+  tiltX += (x-lx)*0.003;
+  tiltY += (y-ly)*0.003;
+  lx=x; ly=y;
+  // 画面傾きから重力方向を生成
+  g.set(Math.sin(tiltX), -Math.cos(tiltY), Math.cos(tiltX)).normalize();
+}
+function onPointerUp(){ dragging=false; }
+window.addEventListener('mousedown', onPointerDown);
+window.addEventListener('mousemove', onPointerMove);
+window.addEventListener('mouseup', onPointerUp);
+window.addEventListener('touchstart', onPointerDown, {passive:false});
+window.addEventListener('touchmove', onPointerMove, {passive:false});
+window.addEventListener('touchend', onPointerUp);
+
+// ====== リサイズ ======
+addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ====== ループ ======
+let last=performance.now();
+function tick(now){
+  const dt = (now-last)/1000; last=now;
+  step(dt);
+  controls.update();
+  renderer.render(scene,camera);
+
+  // debug
+  dbg.textContent = `g=(${g.x.toFixed(2)}, ${g.y.toFixed(2)}, ${g.z.toFixed(2)})  `+
+                    `${haveGyro?'gyro:ON':'gyro:OFF  (ドラッグで傾き)'}`;
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+})();</script>
+</body>
+</html>
