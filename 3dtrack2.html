@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Magic Tree: Star & Implosion</title>
+    <title>Magic Tree: Star Message</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #020205; }
         #input_video { display: none; }
@@ -27,7 +27,7 @@
 
     <div id="loading">Summoning Christmas...</div>
     <div id="info">
-        ✌️ <b>チョキ</b>：星を灯す　✊ <b>グー</b>：圧縮する<br>
+        ✌️ <b>チョキ</b>：星とメッセージ　✊ <b>グー</b>：圧縮する<br>
         ✋ <b>パー</b>：色を変える　👌 <b>ピンチ</b>：ツリー⇔雪
     </div>
     
@@ -35,7 +35,7 @@
     <canvas id="output_canvas"></canvas>
 
 <script>
-    // --- 1. テクスチャ生成 (粒子用 & 星用) ---
+    // --- 1. テクスチャ生成 ---
     function createGlowTexture(isStar = false) {
         const canvas = document.createElement('canvas');
         canvas.width = 64; canvas.height = 64;
@@ -57,6 +57,20 @@
         return new THREE.CanvasTexture(canvas);
     }
 
+    function createTextTexture() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512; canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        ctx.font = 'bold 80px "Arial", sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor = '#ffff00';
+        ctx.shadowBlur = 15;
+        ctx.fillText('Merry Xmas!', 256, 64);
+        return new THREE.CanvasTexture(canvas);
+    }
+
     // --- 2. Three.js 初期設定 ---
     const canvas = document.getElementById('output_canvas');
     const renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
@@ -70,19 +84,19 @@
     camera.position.set(0, 0, 8);
 
     // --- 3. パーティクル・ツリー構築 ---
-    const particleCount = 2500;
+    const particleCount = 3000;
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array(particleCount * 3);
     const colors = new Float32Array(particleCount * 3);
     const basePositions = [];
     const scatterOffsets = [];
-    const particleTypes = []; // 0:Main, 1:Sub
+    const particleTypes = []; 
 
     const palettes = [
-        { main: new THREE.Color(0x00ff88), sub: new THREE.Color(0xffaa00) }, // 緑×金
-        { main: new THREE.Color(0x0088ff), sub: new THREE.Color(0xffffff) }, // 青×白
-        { main: new THREE.Color(0xff4444), sub: new THREE.Color(0xffffff) }, // 赤×白
-        { main: new THREE.Color(0xff00ff), sub: new THREE.Color(0x00ffff) }  // ネオン
+        { main: new THREE.Color(0x00ff88), sub: new THREE.Color(0xffaa00) },
+        { main: new THREE.Color(0x0088ff), sub: new THREE.Color(0xffffff) },
+        { main: new THREE.Color(0xff4444), sub: new THREE.Color(0xffffff) },
+        { main: new THREE.Color(0xff00ff), sub: new THREE.Color(0x00ffff) }
     ];
     let currentPaletteIndex = 0;
     let targetColorMain = palettes[0].main;
@@ -90,12 +104,22 @@
     const colorSnow = new THREE.Color(0xffffff);
 
     for (let i = 0; i < particleCount; i++) {
-        const y = Math.random() * 6 - 3;
-        const radius = (3 - y) * 0.4 + 0.1;
-        const angle = y * 5 + Math.random() * Math.PI * 2;
+        // 高さを圧縮 (-2.5 〜 +2.5)
+        let y = Math.random() * 5 - 2.5; 
         
-        const x = Math.cos(angle) * radius + (Math.random() - 0.5) * 0.5;
-        const z = Math.sin(angle) * radius + (Math.random() - 0.5) * 0.5;
+        const distanceTop = 2.7 - y; 
+        const layerHeight = 1.0; 
+        const layerProgress = (distanceTop % layerHeight) / layerHeight;
+        
+        // 横幅(Radius)を広く
+        let maxRadius = (distanceTop * 0.35) + (layerProgress * 0.5 * Math.sqrt(distanceTop));
+        if (maxRadius < 0) maxRadius = 0;
+
+        const r = maxRadius * (0.2 + 0.8 * Math.sqrt(Math.random()));
+        
+        const angle = Math.random() * Math.PI * 2;
+        const x = Math.cos(angle) * r;
+        const z = Math.sin(angle) * r;
 
         positions[i * 3] = x;
         positions[i * 3 + 1] = y;
@@ -117,13 +141,14 @@
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
     const material = new THREE.PointsMaterial({
-        size: 0.15, map: createGlowTexture(false), vertexColors: true,
+        size: 0.12,
+        map: createGlowTexture(false), vertexColors: true,
         blending: THREE.AdditiveBlending, depthWrite: false, transparent: true
     });
     const particlesMesh = new THREE.Points(geometry, material);
     scene.add(particlesMesh);
 
-    // --- 4. 星 (Star) の作成 ---
+    // --- 4. 星 (Star) ---
     const starMaterial = new THREE.SpriteMaterial({ 
         map: createGlowTexture(true), 
         color: 0xffffaa, 
@@ -131,18 +156,28 @@
     });
     const starSprite = new THREE.Sprite(starMaterial);
     starSprite.scale.set(1.5, 1.5, 1.0);
-    starSprite.position.set(0, 3.2, 0);
+    starSprite.position.set(0, 2.8, 0); 
     starSprite.visible = false;
     scene.add(starSprite);
 
-    // --- 5. アニメーション制御変数 ---
+    // --- 5. 文字 (Merry Xmas) ---
+    const textMaterial = new THREE.SpriteMaterial({
+        map: createTextTexture(),
+        transparent: true,
+        opacity: 0
+    });
+    const textSprite = new THREE.Sprite(textMaterial);
+    textSprite.scale.set(4, 1, 1);
+    textSprite.position.set(0, 4.0, 0);
+    scene.add(textSprite);
+
+    // --- 6. アニメーション制御 ---
     let targetScale = 1.0;
     let currentScale = 1.0;
     let explosionFactor = 0.0;
     let handDetected = false;
     let lastColorChangeTime = 0;
     
-    // ジェスチャー状態
     let isFist = false;
     let isPeace = false;
     let isOpen = false;
@@ -150,15 +185,10 @@
     function animate() {
         requestAnimationFrame(animate);
 
-        // スケールアニメーション
         currentScale += (targetScale - currentScale) * 0.1;
 
-        // --- ★修正箇所: 雪化係数の計算ロジック変更 ---
-        // 以前は scale > 2.0 でしたが、1.0を超えた瞬間から徐々に白く散るように変更
-        // (currentScale - 1.0) * 0.4 なので、スケール3.5くらいで完全に白(1.0)になります
         let targetExplosion = Math.max(0, (currentScale - 1.0) * 0.4);
-        targetExplosion = Math.min(targetExplosion, 1.0); // 最大1.0でストップ
-
+        targetExplosion = Math.min(targetExplosion, 1.0);
         explosionFactor += (targetExplosion - explosionFactor) * 0.05;
 
         const time = Date.now() * 0.001;
@@ -173,20 +203,19 @@
             const sy = scatterOffsets[i].y;
             const sz = scatterOffsets[i].z;
 
-            // 通常のゆらぎ
-            const wobble = Math.sin(time * 2 + by) * 0.03; 
+            // ツリーの揺らぎ
+            const wobble = Math.sin(time * 2 + by) * 0.02; 
 
             // 雪モードの動き
-            const snowX = sx * 5.0 + Math.sin(time * 0.5 + i) * 0.5;
-            const snowY = sy * 5.0 + Math.cos(time * 0.3 + i) * 0.5;
-            const snowZ = sz * 5.0 + Math.sin(time * 0.7 + i) * 0.5;
+            const snowX = sx * 6.0 + Math.sin(time * 0.5 + i) * 0.5;
+            const snowY = sy * 6.0 + Math.cos(time * 0.3 + i) * 0.5;
+            const snowZ = sz * 6.0 + Math.sin(time * 0.7 + i) * 0.5;
 
-            // 位置ブレンド (ツリー <-> 雪)
+            // 位置ブレンド
             let px = bx + (snowX - bx) * explosionFactor;
             let py = by + (snowY - by) * explosionFactor;
             let pz = bz + (snowZ - bz) * explosionFactor;
 
-            // 最終座標セット
             posAttr.setXYZ(i, px * currentScale, py * currentScale, pz * currentScale);
 
             // 色ブレンド
@@ -195,12 +224,10 @@
             const curG = colAttr.getY(i);
             const curB = colAttr.getZ(i);
 
-            // 雪になると白くなる
             const finalR = baseC.r + (colorSnow.r - baseC.r) * explosionFactor;
             const finalG = baseC.g + (colorSnow.g - baseC.g) * explosionFactor;
             const finalB = baseC.b + (colorSnow.b - baseC.b) * explosionFactor;
 
-            // 色を滑らかに変更
             colAttr.setXYZ(i,
                 curR + (finalR - curR) * 0.05,
                 curG + (finalG - curG) * 0.05,
@@ -210,11 +237,26 @@
         posAttr.needsUpdate = true;
         colAttr.needsUpdate = true;
 
+        // 星の位置
         if (starSprite.visible) {
             const pulse = 1.2 + Math.sin(time * 5) * 0.3;
             starSprite.scale.set(pulse, pulse, 1.0);
-            starSprite.position.x = 0;
-            starSprite.position.z = 0;
+            starSprite.position.set(0, 2.8 * currentScale, 0);
+        }
+
+        // --- ★修正箇所: 文字表示のロジック変更 ---
+        // 以前: 手がない時に表示
+        // 今回: チョキ(isPeace)で星が出ている時に表示
+        const targetOpacity = isPeace ? 1.0 : 0.0;
+        
+        // ふわっと変化させる
+        textMaterial.opacity += (targetOpacity - textMaterial.opacity) * 0.05;
+        
+        if (textMaterial.opacity > 0.01) {
+            textSprite.position.y = (4.0 + Math.sin(time * 2) * 0.2) * currentScale;
+            textSprite.visible = true;
+        } else {
+            textSprite.visible = false;
         }
 
         if (!handDetected) particlesMesh.rotation.y += 0.005;
@@ -223,7 +265,7 @@
     }
     animate();
 
-    // --- 6. ジェスチャー判定ロジック ---
+    // --- 7. ジェスチャー判定 ---
     const videoElement = document.getElementById('input_video');
     const loadingElement = document.getElementById('loading');
 
@@ -243,14 +285,11 @@
             isPeace = isIndexOpen && isMiddleOpen && !isRingOpen && !isPinkyOpen;
             isOpen = isIndexOpen && isMiddleOpen && isRingOpen && isPinkyOpen;
             
+            // 星の表示
             starSprite.visible = isPeace;
-            if (isPeace) {
-                targetScale = 1.0; 
-            }
-
-            if (isFist) {
-                targetScale = 0.2; 
-            }
+            
+            if (isPeace) targetScale = 1.0; 
+            if (isFist) targetScale = 0.2; 
 
             if (isOpen) {
                 const now = Date.now();
@@ -264,7 +303,6 @@
                 const thumb = landmarks[4];
                 const index = landmarks[8];
                 const distance = Math.sqrt(Math.pow(thumb.x - index.x, 2) + Math.pow(thumb.y - index.y, 2));
-                
                 targetScale = 1.0 + (distance * 8.0);
             }
 
@@ -272,11 +310,11 @@
             particlesMesh.rotation.y = (handCenterX - 0.5) * -3;
             particlesMesh.rotation.x = (landmarks[9].y - 0.5) * -2;
             
-            starSprite.position.x = 0;
-
         } else {
             handDetected = false;
             starSprite.visible = false;
+            // 手がない時は文字も消す（isPeaceがfalseになるため自然に消えます）
+            isPeace = false;
             targetScale = 1.0;
         }
     }
