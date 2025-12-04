@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Hand Gesture 3D Control</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        /* カメラ映像は裏で処理するため非表示（またはデバッグ用に小さく表示） */
+        #input_video { display: none; }
+        /* 3D描画用のキャンバス */
+        #output_canvas {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: 1;
+        }
+        /* ガイド用テキスト */
+        #info {
+            position: absolute;
+            top: 10px; left: 0; width: 100%;
+            text-align: center;
+            color: white;
+            z-index: 2;
+            font-family: sans-serif;
+            pointer-events: none;
+            text-shadow: 1px 1px 2px black;
+        }
+        /* 読み込み中表示 */
+        #loading {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: #00ff00; z-index: 3; font-family: monospace;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="info">カメラへのアクセスを許可し、手をかざしてください。<br>指の位置で箱が回転します。</div>
+    <div id="loading">System Loading...</div>
+    
+    <video id="input_video" playsinline></video>
+    <canvas id="output_canvas"></canvas>
+
+<script>
+    // --- 1. Three.js (3D表示) のセットアップ ---
+    const canvas = document.getElementById('output_canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.z = 3;
+
+    // ワイヤーフレームのキューブを作成
+    const geometry = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+    const material = new THREE.MeshBasicMaterial({ color: 0x00ff00, wireframe: true });
+    const cube = new THREE.Mesh(geometry, material);
+    scene.add(cube);
+
+    // 回転の目標値
+    let targetRotationX = 0;
+    let targetRotationY = 0;
+
+    function animate() {
+        requestAnimationFrame(animate);
+        
+        // 滑らかに回転させる（線形補間）
+        cube.rotation.x += (targetRotationX - cube.rotation.x) * 0.1;
+        cube.rotation.y += (targetRotationY - cube.rotation.y) * 0.1;
+
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    // --- 2. MediaPipe Hands (手認識) のセットアップ ---
+    const videoElement = document.getElementById('input_video');
+    const loadingElement = document.getElementById('loading');
+
+    function onResults(results) {
+        loadingElement.style.display = 'none';
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            // 最初に検出された手を使用
+            const landmarks = results.multiHandLandmarks[0];
+            
+            // 人差し指の先端 (Landmark 8) の座標を取得 (0.0 〜 1.0)
+            const indexFinger = landmarks[8];
+            
+            // 座標を回転角度に変換
+            // x: 0(左)〜1(右) -> Y軸回転
+            // y: 0(上)〜1(下) -> X軸回転
+            
+            // 画面中心(0.5)を基準に回転量を計算 (感度を調整するために * 4 しています)
+            targetRotationY = (indexFinger.x - 0.5) * 4; 
+            targetRotationX = (indexFinger.y - 0.5) * 4;
+            
+            // 色を変えて認識していることをフィードバック
+            material.color.setHex(0x00ffff); 
+        } else {
+            // 手が見えないときは元の色に戻す
+            material.color.setHex(0x00ff00);
+            
+            // オプション: 手がないときは自動回転させても面白い
+            // targetRotationX += 0.01;
+            // targetRotationY += 0.01;
+        }
+    }
+
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+
+    hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1, // 0:軽量, 1:標準 (スマホなら0か1が良い)
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+    });
+
+    hands.onResults(onResults);
+
+    // カメラの起動
+    const cameraUtils = new Camera(videoElement, {
+        onFrame: async () => {
+            await hands.send({image: videoElement});
+        },
+        width: 640,
+        height: 480
+    });
+    cameraUtils.start();
+
+    // リサイズ対応
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+</script>
+</body>
+</html>
