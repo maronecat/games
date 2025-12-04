@@ -42,13 +42,11 @@
         const ctx = canvas.getContext('2d');
         const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
         if (isStar) {
-            // 星はより鋭く、中心が明るい
             gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
             gradient.addColorStop(0.1, 'rgba(255, 255, 220, 1)');
             gradient.addColorStop(0.4, 'rgba(255, 200, 100, 0.4)');
             gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
         } else {
-            // パーティクルはふわっと
             gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
             gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.8)');
             gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.2)');
@@ -80,7 +78,6 @@
     const scatterOffsets = [];
     const particleTypes = []; // 0:Main, 1:Sub
 
-    // カラーパレット
     const palettes = [
         { main: new THREE.Color(0x00ff88), sub: new THREE.Color(0xffaa00) }, // 緑×金
         { main: new THREE.Color(0x0088ff), sub: new THREE.Color(0xffffff) }, // 青×白
@@ -134,8 +131,8 @@
     });
     const starSprite = new THREE.Sprite(starMaterial);
     starSprite.scale.set(1.5, 1.5, 1.0);
-    starSprite.position.set(0, 3.2, 0); // ツリーのてっぺん
-    starSprite.visible = false; // 最初は消しておく
+    starSprite.position.set(0, 3.2, 0);
+    starSprite.visible = false;
     scene.add(starSprite);
 
     // --- 5. アニメーション制御変数 ---
@@ -156,8 +153,12 @@
         // スケールアニメーション
         currentScale += (targetScale - currentScale) * 0.1;
 
-        // 爆発(雪化)係数の計算: スケールが大きいと雪になる
-        let targetExplosion = (currentScale > 2.0) ? Math.min((currentScale - 2.0) * 0.8, 1.5) : 0;
+        // --- ★修正箇所: 雪化係数の計算ロジック変更 ---
+        // 以前は scale > 2.0 でしたが、1.0を超えた瞬間から徐々に白く散るように変更
+        // (currentScale - 1.0) * 0.4 なので、スケール3.5くらいで完全に白(1.0)になります
+        let targetExplosion = Math.max(0, (currentScale - 1.0) * 0.4);
+        targetExplosion = Math.min(targetExplosion, 1.0); // 最大1.0でストップ
+
         explosionFactor += (targetExplosion - explosionFactor) * 0.05;
 
         const time = Date.now() * 0.001;
@@ -209,18 +210,13 @@
         posAttr.needsUpdate = true;
         colAttr.needsUpdate = true;
 
-        // 星のアニメーション (キラキラ)
         if (starSprite.visible) {
             const pulse = 1.2 + Math.sin(time * 5) * 0.3;
             starSprite.scale.set(pulse, pulse, 1.0);
-            // 星もツリーと一緒に回転
             starSprite.position.x = 0;
             starSprite.position.z = 0;
-            // 座標変換を入れるとよりリアルだが、簡易的に常に上部に配置
-            // (手で回転させたときに追従させるため、Meshの子要素にするのが本来だが今回は簡易実装)
         }
 
-        // 手がないときは自動回転
         if (!handDetected) particlesMesh.rotation.y += 0.005;
 
         renderer.render(scene, camera);
@@ -238,76 +234,45 @@
             handDetected = true;
             const landmarks = results.multiHandLandmarks[0];
 
-            // 各指の「指先(TIP)」と「第2関節(PIP)」を取得
-            // Y座標は画面上が0、下が1なので、TIP < PIP なら「指が伸びている」
             const isIndexOpen  = landmarks[8].y  < landmarks[6].y;
             const isMiddleOpen = landmarks[12].y < landmarks[10].y;
             const isRingOpen   = landmarks[16].y < landmarks[14].y;
             const isPinkyOpen  = landmarks[20].y < landmarks[18].y;
-            // 親指はX座標などで見るのが正確だが、簡易的に「人差し指から離れているか」等で見る
-            // ここでは簡易的に4本の指で判定
 
-            // --- ジェスチャー判定 ---
-            
-            // ✊ グー (Fist): 人差し指〜小指がすべて閉じている
             isFist = !isIndexOpen && !isMiddleOpen && !isRingOpen && !isPinkyOpen;
-
-            // ✌️ チョキ (Peace): 人差し指・中指OPEN、薬指・小指CLOSE
             isPeace = isIndexOpen && isMiddleOpen && !isRingOpen && !isPinkyOpen;
-
-            // ✋ パー (Open): 4本すべてOPEN (親指も含めたいが誤検知減らすため4本+親指距離で判定も可)
-            // 今回は厳密に「全部伸びてる」判定
             isOpen = isIndexOpen && isMiddleOpen && isRingOpen && isPinkyOpen;
-
             
-            // --- アクションの適用 ---
-
-            // 1. 星の制御 (チョキ)
             starSprite.visible = isPeace;
             if (isPeace) {
-                // チョキのときはツリー形状(スケール1)を強制
                 targetScale = 1.0; 
             }
 
-            // 2. 圧縮の制御 (グー)
             if (isFist) {
-                // ぐしゃっと内包 (極小スケール)
                 targetScale = 0.2; 
             }
 
-            // 3. カラーチェンジ (パー)
             if (isOpen) {
                 const now = Date.now();
-                if (now - lastColorChangeTime > 1500) { // 1.5秒に1回だけ
+                if (now - lastColorChangeTime > 1500) {
                     changeColorPalette();
                     lastColorChangeTime = now;
                 }
-                // パーのときは「指が開いている」ので、通常ロジックだと雪になる
-                // そのままでOK (雪になりながら色が変わるのが綺麗)
             }
 
-            // 4. 基本のピンチ操作 (ジェスチャー以外)
             if (!isFist && !isPeace) {
-                // 親指と人差し指の距離でスケール計算
                 const thumb = landmarks[4];
                 const index = landmarks[8];
                 const distance = Math.sqrt(Math.pow(thumb.x - index.x, 2) + Math.pow(thumb.y - index.y, 2));
                 
-                // 距離0.05(閉) -> Scale 1.0
-                // 距離0.40(開) -> Scale 4.0
                 targetScale = 1.0 + (distance * 8.0);
             }
 
-            // 手の位置で回転
-            const handCenterX = landmarks[9].x; // 手のひら中心
+            const handCenterX = landmarks[9].x;
             particlesMesh.rotation.y = (handCenterX - 0.5) * -3;
             particlesMesh.rotation.x = (landmarks[9].y - 0.5) * -2;
             
-            // 星の位置合わせ (簡易)
-            // 星もツリーと同じ回転を与える
-            starSprite.position.x = 0; // 中心固定だが、回転ロジックと合わせるならMeshに入れるべき
-            // 今回はSpriteなので常に正面を向く特性がある。位置だけ追従させるのは複雑になるので
-            // 「ツリーのてっぺん」に固定しておくのが一番綺麗に見えます。
+            starSprite.position.x = 0;
 
         } else {
             handDetected = false;
@@ -345,5 +310,4 @@
     });
 </script>
 </body>
-
 </html>
