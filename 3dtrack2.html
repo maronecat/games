@@ -3,15 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Magic Tree: Gesture Master</title>
+    <title>Magic Tree: Star & Implosion</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #050510; }
+        body { margin: 0; overflow: hidden; background-color: #020205; }
         #input_video { display: none; }
         #output_canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
         #info {
             position: absolute; bottom: 20px; width: 100%; text-align: center;
             color: rgba(255, 255, 255, 0.9); z-index: 2; font-family: sans-serif;
-            pointer-events: none; text-shadow: 0 0 5px cyan; font-size: 0.9rem; line-height: 1.5;
+            pointer-events: none; text-shadow: 0 0 5px cyan; font-size: 0.9rem; line-height: 1.6;
         }
         #loading {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -25,68 +25,74 @@
 </head>
 <body>
 
-    <div id="loading">Loading Magic...</div>
+    <div id="loading">Summoning Christmas...</div>
     <div id="info">
-        👌 <b>つまむ/開く</b>：拡大・雪になる<br>
-        ✌️ <b>ピース</b>：色を変える (Green -> Blue -> Pink)
+        ✌️ <b>チョキ</b>：星を灯す　✊ <b>グー</b>：圧縮する<br>
+        ✋ <b>パー</b>：色を変える　👌 <b>ピンチ</b>：ツリー⇔雪
     </div>
     
     <video id="input_video" playsinline></video>
     <canvas id="output_canvas"></canvas>
 
 <script>
-    // --- 1. テクスチャ生成 ---
-    function createGlowTexture() {
+    // --- 1. テクスチャ生成 (粒子用 & 星用) ---
+    function createGlowTexture(isStar = false) {
         const canvas = document.createElement('canvas');
-        canvas.width = 32; canvas.height = 32;
+        canvas.width = 64; canvas.height = 64;
         const ctx = canvas.getContext('2d');
-        const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
-        gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
-        gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.8)');
-        gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.2)');
-        gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+        if (isStar) {
+            // 星はより鋭く、中心が明るい
+            gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+            gradient.addColorStop(0.1, 'rgba(255, 255, 220, 1)');
+            gradient.addColorStop(0.4, 'rgba(255, 200, 100, 0.4)');
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        } else {
+            // パーティクルはふわっと
+            gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+            gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.8)');
+            gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.2)');
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        }
         ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, 32, 32);
+        ctx.fillRect(0, 0, 64, 64);
         return new THREE.CanvasTexture(canvas);
     }
 
-    // --- 2. Three.js 初期化 ---
+    // --- 2. Three.js 初期設定 ---
     const canvas = document.getElementById('output_canvas');
     const renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x050510, 0.05);
+    scene.fog = new THREE.FogExp2(0x020205, 0.04);
 
     const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
     camera.position.set(0, 0, 8);
 
-    // --- 3. カラーパレット定義 ---
-    const palettes = [
-        { name: "Classic", main: new THREE.Color(0x00ff88), sub: new THREE.Color(0xffaa00) }, // 緑×金
-        { name: "Frozen",  main: new THREE.Color(0x00aaff), sub: new THREE.Color(0xffffff) }, // 青×白
-        { name: "Sakura",  main: new THREE.Color(0xff66b2), sub: new THREE.Color(0xffffff) }, // ピンク×白
-        { name: "Mystic",  main: new THREE.Color(0x9900ff), sub: new THREE.Color(0x00ffff) }  // 紫×シアン
-    ];
-    let currentPaletteIndex = 0;
-    
-    // 現在のターゲット色（アニメーション用）
-    let targetColorMain = palettes[0].main;
-    let targetColorSub = palettes[0].sub;
-    const colorSnow = new THREE.Color(0xffffff);
-
-    // --- 4. パーティクル作成 ---
+    // --- 3. パーティクル・ツリー構築 ---
     const particleCount = 2500;
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array(particleCount * 3);
     const colors = new Float32Array(particleCount * 3);
     const basePositions = [];
     const scatterOffsets = [];
-    const particleTypes = []; // 0:MainColor, 1:SubColor
+    const particleTypes = []; // 0:Main, 1:Sub
+
+    // カラーパレット
+    const palettes = [
+        { main: new THREE.Color(0x00ff88), sub: new THREE.Color(0xffaa00) }, // 緑×金
+        { main: new THREE.Color(0x0088ff), sub: new THREE.Color(0xffffff) }, // 青×白
+        { main: new THREE.Color(0xff4444), sub: new THREE.Color(0xffffff) }, // 赤×白
+        { main: new THREE.Color(0xff00ff), sub: new THREE.Color(0x00ffff) }  // ネオン
+    ];
+    let currentPaletteIndex = 0;
+    let targetColorMain = palettes[0].main;
+    let targetColorSub = palettes[0].sub;
+    const colorSnow = new THREE.Color(0xffffff);
 
     for (let i = 0; i < particleCount; i++) {
-        // ツリー形状
         const y = Math.random() * 6 - 3;
         const radius = (3 - y) * 0.4 + 0.1;
         const angle = y * 5 + Math.random() * Math.PI * 2;
@@ -101,11 +107,9 @@
         basePositions.push({x, y, z});
         scatterOffsets.push(new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5).normalize());
 
-        // 色タイプ決定
-        const isSub = Math.random() > 0.8; // 20%がサブカラー（オーナメント）
+        const isSub = Math.random() > 0.85;
         particleTypes.push(isSub ? 1 : 0);
         
-        // 初期色
         const c = isSub ? targetColorSub : targetColorMain;
         colors[i * 3] = c.r;
         colors[i * 3 + 1] = c.g;
@@ -116,34 +120,51 @@
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
     const material = new THREE.PointsMaterial({
-        size: 0.15, map: createGlowTexture(), vertexColors: true,
+        size: 0.15, map: createGlowTexture(false), vertexColors: true,
         blending: THREE.AdditiveBlending, depthWrite: false, transparent: true
     });
     const particlesMesh = new THREE.Points(geometry, material);
     scene.add(particlesMesh);
 
-    // --- 5. アニメーション制御 ---
+    // --- 4. 星 (Star) の作成 ---
+    const starMaterial = new THREE.SpriteMaterial({ 
+        map: createGlowTexture(true), 
+        color: 0xffffaa, 
+        blending: THREE.AdditiveBlending 
+    });
+    const starSprite = new THREE.Sprite(starMaterial);
+    starSprite.scale.set(1.5, 1.5, 1.0);
+    starSprite.position.set(0, 3.2, 0); // ツリーのてっぺん
+    starSprite.visible = false; // 最初は消しておく
+    scene.add(starSprite);
+
+    // --- 5. アニメーション制御変数 ---
     let targetScale = 1.0;
     let currentScale = 1.0;
-    let explosionFactor = 0.0; 
+    let explosionFactor = 0.0;
     let handDetected = false;
-    let lastGestureTime = 0; // 連続検知防止用
+    let lastColorChangeTime = 0;
+    
+    // ジェスチャー状態
+    let isFist = false;
+    let isPeace = false;
+    let isOpen = false;
 
     function animate() {
         requestAnimationFrame(animate);
 
-        // スケール＆爆発計算
+        // スケールアニメーション
         currentScale += (targetScale - currentScale) * 0.1;
-        let targetExplosion = (currentScale > 2.5) ? Math.min((currentScale - 2.5) * 0.8, 1.5) : 0;
+
+        // 爆発(雪化)係数の計算: スケールが大きいと雪になる
+        let targetExplosion = (currentScale > 2.0) ? Math.min((currentScale - 2.0) * 0.8, 1.5) : 0;
         explosionFactor += (targetExplosion - explosionFactor) * 0.05;
 
-        // パーティクル更新
+        const time = Date.now() * 0.001;
         const posAttr = geometry.attributes.position;
         const colAttr = geometry.attributes.color;
-        const time = Date.now() * 0.001;
 
         for (let i = 0; i < particleCount; i++) {
-            // 位置計算
             const bx = basePositions[i].x;
             const by = basePositions[i].y;
             const bz = basePositions[i].z;
@@ -151,33 +172,34 @@
             const sy = scatterOffsets[i].y;
             const sz = scatterOffsets[i].z;
 
-            const wobble = Math.sin(time + by) * 0.05; 
+            // 通常のゆらぎ
+            const wobble = Math.sin(time * 2 + by) * 0.03; 
+
+            // 雪モードの動き
             const snowX = sx * 5.0 + Math.sin(time * 0.5 + i) * 0.5;
             const snowY = sy * 5.0 + Math.cos(time * 0.3 + i) * 0.5;
             const snowZ = sz * 5.0 + Math.sin(time * 0.7 + i) * 0.5;
 
-            const px = bx + (snowX - bx) * explosionFactor;
-            const py = by + (snowY - by) * explosionFactor;
-            const pz = bz + (snowZ - bz) * explosionFactor;
+            // 位置ブレンド (ツリー <-> 雪)
+            let px = bx + (snowX - bx) * explosionFactor;
+            let py = by + (snowY - by) * explosionFactor;
+            let pz = bz + (snowZ - bz) * explosionFactor;
 
+            // 最終座標セット
             posAttr.setXYZ(i, px * currentScale, py * currentScale, pz * currentScale);
 
-            // 色計算（パレット遷移 ＋ 雪変化）
-            // 現在のパーティクルのあるべき色
+            // 色ブレンド
             const baseC = (particleTypes[i] === 1) ? targetColorSub : targetColorMain;
-            
-            // 現在の色を取得
             const curR = colAttr.getX(i);
             const curG = colAttr.getY(i);
             const curB = colAttr.getZ(i);
 
-            // ターゲット色（雪化を考慮）
-            // explosionFactorが高いほど白に近づく
+            // 雪になると白くなる
             const finalR = baseC.r + (colorSnow.r - baseC.r) * explosionFactor;
             const finalG = baseC.g + (colorSnow.g - baseC.g) * explosionFactor;
             const finalB = baseC.b + (colorSnow.b - baseC.b) * explosionFactor;
 
-            // 色をゆっくり遷移させる (Lerp)
+            // 色を滑らかに変更
             colAttr.setXYZ(i,
                 curR + (finalR - curR) * 0.05,
                 curG + (finalG - curG) * 0.05,
@@ -187,12 +209,25 @@
         posAttr.needsUpdate = true;
         colAttr.needsUpdate = true;
 
+        // 星のアニメーション (キラキラ)
+        if (starSprite.visible) {
+            const pulse = 1.2 + Math.sin(time * 5) * 0.3;
+            starSprite.scale.set(pulse, pulse, 1.0);
+            // 星もツリーと一緒に回転
+            starSprite.position.x = 0;
+            starSprite.position.z = 0;
+            // 座標変換を入れるとよりリアルだが、簡易的に常に上部に配置
+            // (手で回転させたときに追従させるため、Meshの子要素にするのが本来だが今回は簡易実装)
+        }
+
+        // 手がないときは自動回転
         if (!handDetected) particlesMesh.rotation.y += 0.005;
+
         renderer.render(scene, camera);
     }
     animate();
 
-    // --- 6. MediaPipe Hands & ジェスチャー判定 ---
+    // --- 6. ジェスチャー判定ロジック ---
     const videoElement = document.getElementById('input_video');
     const loadingElement = document.getElementById('loading');
 
@@ -203,38 +238,80 @@
             handDetected = true;
             const landmarks = results.multiHandLandmarks[0];
 
-            // 1. ピンチ判定 (拡大縮小)
-            const thumb = landmarks[4];
-            const index = landmarks[8];
-            const distance = Math.sqrt(Math.pow(thumb.x - index.x, 2) + Math.pow(thumb.y - index.y, 2));
-            targetScale = 1.0 + (distance * 8.0);
-
-            // 回転制御
-            const handCenterX = (thumb.x + index.x) / 2;
-            particlesMesh.rotation.y = (handCenterX - 0.5) * -3;
-            particlesMesh.rotation.x = (index.y - 0.5) * -2;
-
-            // 2. ピースサイン判定 (色変更)
-            // 条件: 人差し指(8)と中指(12)が伸びていて、薬指(16)と小指(20)が曲がっている
-            // 指先(TIP)が第2関節(PIP)より上にあるかどうか（Y座標は上が0なので TIP < PIP）
-            
-            const isIndexOpen = landmarks[8].y < landmarks[6].y;
+            // 各指の「指先(TIP)」と「第2関節(PIP)」を取得
+            // Y座標は画面上が0、下が1なので、TIP < PIP なら「指が伸びている」
+            const isIndexOpen  = landmarks[8].y  < landmarks[6].y;
             const isMiddleOpen = landmarks[12].y < landmarks[10].y;
-            const isRingClosed = landmarks[16].y > landmarks[14].y;
-            const isPinkyClosed = landmarks[20].y > landmarks[18].y;
+            const isRingOpen   = landmarks[16].y < landmarks[14].y;
+            const isPinkyOpen  = landmarks[20].y < landmarks[18].y;
+            // 親指はX座標などで見るのが正確だが、簡易的に「人差し指から離れているか」等で見る
+            // ここでは簡易的に4本の指で判定
 
-            // 簡易ピース判定 (親指の状態は問わない)
-            if (isIndexOpen && isMiddleOpen && isRingClosed && isPinkyClosed) {
-                const now = Date.now();
-                // 連続切り替え防止 (1秒クールダウン)
-                if (now - lastGestureTime > 1000) {
-                    changeColorPalette();
-                    lastGestureTime = now;
-                }
+            // --- ジェスチャー判定 ---
+            
+            // ✊ グー (Fist): 人差し指〜小指がすべて閉じている
+            isFist = !isIndexOpen && !isMiddleOpen && !isRingOpen && !isPinkyOpen;
+
+            // ✌️ チョキ (Peace): 人差し指・中指OPEN、薬指・小指CLOSE
+            isPeace = isIndexOpen && isMiddleOpen && !isRingOpen && !isPinkyOpen;
+
+            // ✋ パー (Open): 4本すべてOPEN (親指も含めたいが誤検知減らすため4本+親指距離で判定も可)
+            // 今回は厳密に「全部伸びてる」判定
+            isOpen = isIndexOpen && isMiddleOpen && isRingOpen && isPinkyOpen;
+
+            
+            // --- アクションの適用 ---
+
+            // 1. 星の制御 (チョキ)
+            starSprite.visible = isPeace;
+            if (isPeace) {
+                // チョキのときはツリー形状(スケール1)を強制
+                targetScale = 1.0; 
             }
+
+            // 2. 圧縮の制御 (グー)
+            if (isFist) {
+                // ぐしゃっと内包 (極小スケール)
+                targetScale = 0.2; 
+            }
+
+            // 3. カラーチェンジ (パー)
+            if (isOpen) {
+                const now = Date.now();
+                if (now - lastColorChangeTime > 1500) { // 1.5秒に1回だけ
+                    changeColorPalette();
+                    lastColorChangeTime = now;
+                }
+                // パーのときは「指が開いている」ので、通常ロジックだと雪になる
+                // そのままでOK (雪になりながら色が変わるのが綺麗)
+            }
+
+            // 4. 基本のピンチ操作 (ジェスチャー以外)
+            if (!isFist && !isPeace) {
+                // 親指と人差し指の距離でスケール計算
+                const thumb = landmarks[4];
+                const index = landmarks[8];
+                const distance = Math.sqrt(Math.pow(thumb.x - index.x, 2) + Math.pow(thumb.y - index.y, 2));
+                
+                // 距離0.05(閉) -> Scale 1.0
+                // 距離0.40(開) -> Scale 4.0
+                targetScale = 1.0 + (distance * 8.0);
+            }
+
+            // 手の位置で回転
+            const handCenterX = landmarks[9].x; // 手のひら中心
+            particlesMesh.rotation.y = (handCenterX - 0.5) * -3;
+            particlesMesh.rotation.x = (landmarks[9].y - 0.5) * -2;
+            
+            // 星の位置合わせ (簡易)
+            // 星もツリーと同じ回転を与える
+            starSprite.position.x = 0; // 中心固定だが、回転ロジックと合わせるならMeshに入れるべき
+            // 今回はSpriteなので常に正面を向く特性がある。位置だけ追従させるのは複雑になるので
+            // 「ツリーのてっぺん」に固定しておくのが一番綺麗に見えます。
 
         } else {
             handDetected = false;
+            starSprite.visible = false;
             targetScale = 1.0;
         }
     }
@@ -242,14 +319,8 @@
     function changeColorPalette() {
         currentPaletteIndex = (currentPaletteIndex + 1) % palettes.length;
         const p = palettes[currentPaletteIndex];
-        
-        // 色ターゲットを更新
         targetColorMain = p.main;
         targetColorSub = p.sub;
-        
-        // ちょっとしたフィードバック (背景を一瞬明るくするとか)
-        document.body.style.backgroundColor = "#111122";
-        setTimeout(() => { document.body.style.backgroundColor = "#050510"; }, 200);
     }
 
     const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
