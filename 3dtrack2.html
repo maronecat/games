@@ -1,108 +1,271 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <title>Solar System Zoom</title>
-  <style>
-    body { margin: 0; overflow: hidden; }
-    canvas { display: block; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Magical Particle Tree</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050510; }
+        #input_video { display: none; }
+        #output_canvas {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1;
+        }
+        #info {
+            position: absolute; bottom: 20px; width: 100%; text-align: center;
+            color: rgba(255, 255, 255, 0.8); z-index: 2; font-family: sans-serif;
+            pointer-events: none; text-shadow: 0 0 5px cyan;
+        }
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #00ffff; z-index: 3; font-family: monospace; font-size: 1.2rem;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
-<script type="module">
-  import * as THREE from 'https://cdn.skypack.dev/three@0.154.0';
 
-  // シーンの作成
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-  const renderer = new THREE.WebGLRenderer();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  document.body.appendChild(renderer.domElement);
+    <div id="loading">Generating Magic...</div>
+    <div id="info">親指と人差し指を「開く」と拡大して雪になり、「閉じる」とツリーに戻ります</div>
+    
+    <video id="input_video" playsinline></video>
+    <canvas id="output_canvas"></canvas>
 
-  // 光源の追加
-  const light = new THREE.PointLight(0xffffff, 1, 100);
-  light.position.set(0, 0, 0); // 太陽の位置
-  scene.add(light);
-
-  // 太陽の作成
-  const sunGeometry = new THREE.SphereGeometry(5, 32, 32);
-  const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xffcc00 });
-  const sun = new THREE.Mesh(sunGeometry, sunMaterial);
-  scene.add(sun);
-
-  // 各惑星を追加する関数
-  const createPlanet = (size, color, distance) => {
-    const geometry = new THREE.SphereGeometry(size, 32, 32);
-    const material = new THREE.MeshStandardMaterial({ color });
-    const planet = new THREE.Mesh(geometry, material);
-    planet.position.x = distance;
-    scene.add(planet);
-    return planet;
-  };
-
-  const planets = [
-    createPlanet(0.5, 0x88ccee, 8),  // 水星
-    createPlanet(0.9, 0xdfbdbd, 11), // 金星
-    createPlanet(1, 0x00aaff, 16),   // 地球
-    createPlanet(0.75, 0xee8822, 22),// 火星
-    createPlanet(2, 0xffaa00, 40),   // 木星
-    createPlanet(1.5, 0xccccff, 60), // 土星
-    createPlanet(1.2, 0x88aaff, 80), // 天王星
-    createPlanet(1.1, 0x5555ff, 100) // 海王星
-  ];
-
-  // カメラの初期位置
-  camera.position.z = 50;
-
-  // デバイスのピンチ用
-  let startDistance = 0;
-  const onPinchStart = (e) => {
-    if (e.touches.length === 2) {
-      const dx = e.touches[0].pageX - e.touches[1].pageX;
-      const dy = e.touches[0].pageY - e.touches[1].pageY;
-      startDistance = Math.sqrt(dx * dx + dy * dy);
+<script>
+    // --- 1. 光る粒子のテクスチャをプログラムで生成 ---
+    // 画像ファイルを読み込むとクロスオリジンエラーが出やすいため、Canvasで動的に作ります
+    function createGlowTexture() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 32; canvas.height = 32;
+        const ctx = canvas.getContext('2d');
+        const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+        gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+        gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.8)');
+        gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.2)');
+        gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, 32, 32);
+        const texture = new THREE.CanvasTexture(canvas);
+        return texture;
     }
-  };
 
-  const onPinchMove = (e) => {
-    if (e.touches.length === 2) {
-      const dx = e.touches[0].pageX - e.touches[1].pageX;
-      const dy = e.touches[0].pageY - e.touches[1].pageY;
-      const newDistance = Math.sqrt(dx * dx + dy * dy);
+    // --- 2. Three.js セットアップ ---
+    const canvas = document.getElementById('output_canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // スマホの負荷軽減
 
-      // ピンチによるズームイン・アウト
-      const zoomFactor = (newDistance - startDistance) * 0.01;
-      camera.position.z -= zoomFactor;
-      startDistance = newDistance;
+    const scene = new THREE.Scene();
+    // 少し幻想的なフォグ（霧）を追加
+    scene.fog = new THREE.FogExp2(0x050510, 0.05);
+
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 0, 8);
+
+    // --- 3. パーティクル・ツリーの作成 ---
+    const particleCount = 2500;
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(particleCount * 3);
+    const colors = new Float32Array(particleCount * 3);
+    const basePositions = []; // ツリー形状の基準位置を記憶
+    const scatterOffsets = []; // 雪になったときの乱数オフセット
+
+    const color1 = new THREE.Color(0x00ff88); // ツリーの緑
+    const color2 = new THREE.Color(0xffaa00); // オーナメントの金
+    const colorSnow = new THREE.Color(0xffffff); // 雪の白
+
+    for (let i = 0; i < particleCount; i++) {
+        // --- ツリーの形状計算 (螺旋円錐) ---
+        const y = Math.random() * 6 - 3; // 高さ -3 ~ 3
+        const radius = (3 - y) * 0.4 + 0.1; // 上に行くほど細く
+        const angle = y * 5 + Math.random() * Math.PI * 2; // 螺旋
+        
+        // 基本位置
+        const x = Math.cos(angle) * radius + (Math.random() - 0.5) * 0.5;
+        const z = Math.sin(angle) * radius + (Math.random() - 0.5) * 0.5;
+
+        positions[i * 3] = x;
+        positions[i * 3 + 1] = y;
+        positions[i * 3 + 2] = z;
+
+        // 基準位置を保存
+        basePositions.push({x, y, z});
+
+        // 散らばる方向（球状に拡散）
+        const scatterDir = new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5).normalize();
+        scatterOffsets.push(scatterDir);
+
+        // 色の初期設定（ランダムに緑や金）
+        const baseColor = Math.random() > 0.8 ? color2 : color1;
+        colors[i * 3] = baseColor.r;
+        colors[i * 3 + 1] = baseColor.g;
+        colors[i * 3 + 2] = baseColor.b;
     }
-  };
 
-  document.addEventListener('touchstart', onPinchStart, false);
-  document.addEventListener('touchmove', onPinchMove, false);
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-  // アニメーションループ
-  const animate = () => {
-    requestAnimationFrame(animate);
-    renderer.render(scene, camera);
-
-    // 回転させる
-    sun.rotation.y += 0.002;
-    planets.forEach((planet, idx) => {
-      planet.rotation.y += 0.01;
-      planet.position.x = Math.cos(Date.now() * 0.001 + idx) * (8 + idx * 10);
-      planet.position.z = Math.sin(Date.now() * 0.001 + idx) * (8 + idx * 10);
+    const material = new THREE.PointsMaterial({
+        size: 0.15,
+        map: createGlowTexture(),
+        vertexColors: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        transparent: true
     });
-  };
-  animate();
 
-  // リサイズ対応
-  window.addEventListener('resize', () => {
-    const width = window.innerWidth;
-    const height = window.innerHeight;
-    renderer.setSize(width, height);
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
-  });
+    const particlesMesh = new THREE.Points(geometry, material);
+    scene.add(particlesMesh);
+
+    // --- 4. アニメーション制御変数 ---
+    let targetScale = 1.0;
+    let currentScale = 1.0;
+    let explosionFactor = 0.0; // 0=ツリー, 1=完全な雪
+    let handDetected = false;
+    let autoRotateSpeed = 0.005;
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        // --- スケールと爆発状態の計算 ---
+        // 指の動きに合わせてスムーズに変化させる
+        currentScale += (targetScale - currentScale) * 0.1;
+
+        // スケールが一定(2.0)を超えたら「雪」モードへ移行
+        let targetExplosion = 0;
+        if (currentScale > 2.5) {
+            // 大きくなりすぎたら散らばる（スケールから2.5引いた分だけ散らばる）
+            targetExplosion = Math.min((currentScale - 2.5) * 0.8, 1.5); 
+        }
+        explosionFactor += (targetExplosion - explosionFactor) * 0.05;
+
+        // --- パーティクルの位置更新 ---
+        const posAttribute = geometry.attributes.position;
+        const colAttribute = geometry.attributes.color;
+
+        for (let i = 0; i < particleCount; i++) {
+            const bx = basePositions[i].x;
+            const by = basePositions[i].y;
+            const bz = basePositions[i].z;
+            const sx = scatterOffsets[i].x;
+            const sy = scatterOffsets[i].y;
+            const sz = scatterOffsets[i].z;
+
+            // ツリーモードの位置
+            // 時間経過でキラキラ揺れる
+            const time = Date.now() * 0.001;
+            const wobble = Math.sin(time + by) * 0.05; 
+
+            // 雪モードの位置（大きく拡散 + 時間で漂う）
+            const snowX = sx * 5.0 + Math.sin(time * 0.5 + i) * 0.5;
+            const snowY = sy * 5.0 + Math.cos(time * 0.3 + i) * 0.5;
+            const snowZ = sz * 5.0 + Math.sin(time * 0.7 + i) * 0.5;
+
+            // 「ツリー形状」と「雪形状」を explosionFactor でブレンド (Lerp)
+            // explosionFactorが0に近いときはツリー、大きいときは雪
+            const px = bx + (snowX - bx) * explosionFactor;
+            const py = by + (snowY - by) * explosionFactor;
+            const pz = bz + (snowZ - bz) * explosionFactor;
+
+            // スケール適用
+            posAttribute.setXYZ(i, px * currentScale, py * currentScale, pz * currentScale);
+
+            // 色の変化：ツリー(緑/金) <-> 雪(白)
+            const isGold = (i % 5 === 0); // 適当に金を混ぜるロジックの簡易再現
+            const treeR = isGold ? color2.r : color1.r;
+            const treeG = isGold ? color2.g : color1.g;
+            const treeB = isGold ? color2.b : color1.b;
+
+            // explosionFactorが高いほど白(雪)に近づける
+            colAttribute.setXYZ(i, 
+                treeR + (colorSnow.r - treeR) * explosionFactor,
+                treeG + (colorSnow.g - treeG) * explosionFactor,
+                treeB + (colorSnow.b - treeB) * explosionFactor
+            );
+        }
+
+        posAttribute.needsUpdate = true;
+        colAttribute.needsUpdate = true;
+
+        // 手がないときはゆっくり回転
+        if (!handDetected) {
+            particlesMesh.rotation.y += autoRotateSpeed;
+        }
+
+        renderer.render(scene, camera);
+    }
+    animate();
+
+
+    // --- 5. MediaPipe Hands 処理 ---
+    const videoElement = document.getElementById('input_video');
+    const loadingElement = document.getElementById('loading');
+
+    function onResults(results) {
+        loadingElement.style.display = 'none';
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            handDetected = true;
+            const landmarks = results.multiHandLandmarks[0];
+
+            // 親指(4) と 人差し指(8) の座標
+            const thumb = landmarks[4];
+            const index = landmarks[8];
+
+            // 2点間の距離を計算 (0.0 ~ 1.0くらいの値になることが多い)
+            const distance = Math.sqrt(
+                Math.pow(thumb.x - index.x, 2) + 
+                Math.pow(thumb.y - index.y, 2)
+            );
+
+            // 距離をスケールに変換
+            // 距離が近い(0.05) -> スケール1.0
+            // 距離が遠い(0.5) -> スケール4.0 (散らばる)
+            // 調整用係数
+            const sensitivity = 8.0; 
+            const minScale = 1.0;
+            
+            targetScale = minScale + (distance * sensitivity);
+
+            // 手の左右の動きで回転させる（ついで機能）
+            const handCenterX = (thumb.x + index.x) / 2;
+            particlesMesh.rotation.y = (handCenterX - 0.5) * -3;
+            particlesMesh.rotation.x = (landmarks[8].y - 0.5) * -2; // 上下で傾き
+
+        } else {
+            handDetected = false;
+            // 手が見えなくなったらツリーに戻す
+            targetScale = 1.0;
+        }
+    }
+
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+
+    hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+    });
+    hands.onResults(onResults);
+
+    const cameraUtils = new Camera(videoElement, {
+        onFrame: async () => { await hands.send({image: videoElement}); },
+        width: 640, height: 480
+    });
+    cameraUtils.start();
+
+    // リサイズ
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
 </script>
 </body>
 </html>
