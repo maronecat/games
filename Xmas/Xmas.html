@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Magic Tree: High Speed Snow</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #020205;
+        }
+
+        #input_video {
+            display: none;
+        }
+
+        #output_canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+        }
+
+        #info {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.9);
+            z-index: 2;
+            font-family: sans-serif;
+            pointer-events: none;
+            text-shadow: 0 0 5px cyan;
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #00ffff;
+            z-index: 3;
+            font-family: monospace;
+            font-size: 1.2rem;
+        }
+
+        #sound-guide {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: #ffff00;
+            z-index: 4;
+            font-family: sans-serif;
+            font-size: 0.8rem;
+            opacity: 0.8;
+            pointer-events: none;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+
+<body>
+
+    <div id="loading">Summoning Christmas...</div>
+    <div id="sound-guide">※画面をクリックして音声をONにしてください</div>
+    <div id="info">
+        ✌️ <b>チョキ</b>：星と音楽　✊ <b>グー</b>：圧縮する<br>
+        ✋ <b>パー</b>：色を変える　👌 <b>ピンチ</b>：雪と鈴の音(倍速)
+    </div>
+
+    <video id="input_video" playsinline></video>
+    <canvas id="output_canvas"></canvas>
+
+    <script>
+        // --- 0. 音声設定 ---
+        const bgmXmas = new Audio('Xmas.mp3');
+        bgmXmas.loop = true;
+        bgmXmas.volume = 0.5;
+
+        const bgmSnow = new Audio('snow.mp3');
+        bgmSnow.loop = true;
+        bgmSnow.volume = 0.5;
+        // ★ここを追加：再生速度を2倍にする
+        bgmSnow.playbackRate = 2.0;
+
+        // 初回クリックで再生許可を得る
+        document.body.addEventListener('click', () => {
+            if (bgmXmas.paused && bgmSnow.paused) {
+                bgmXmas.play().then(() => bgmXmas.pause());
+                bgmSnow.play().then(() => bgmSnow.pause());
+                document.getElementById('sound-guide').style.display = 'none';
+            }
+        });
+
+        // --- 1. テクスチャ生成 ---
+        function createGlowTexture(isStar = false) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64; canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+            if (isStar) {
+                gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+                gradient.addColorStop(0.1, 'rgba(255, 255, 220, 1)');
+                gradient.addColorStop(0.4, 'rgba(255, 200, 100, 0.4)');
+                gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            } else {
+                gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+                gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.8)');
+                gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.2)');
+                gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            }
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 64, 64);
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        function createTextTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 512; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            ctx.font = 'bold 80px "Arial", sans-serif';
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowColor = '#ffff00';
+            ctx.shadowBlur = 15;
+            ctx.fillText('Merry Xmas!', 256, 64);
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        // --- 2. Three.js 初期設定 ---
+        const canvas = document.getElementById('output_canvas');
+        const renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x020205, 0.04);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 0, 8);
+
+        // --- 3. パーティクル・ツリー構築 ---
+        const particleCount = 3000;
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(particleCount * 3);
+        const colors = new Float32Array(particleCount * 3);
+        const basePositions = [];
+        const scatterOffsets = [];
+        const particleTypes = [];
+
+        const palettes = [
+            { main: new THREE.Color(0x00ff88), sub: new THREE.Color(0xffaa00) },
+            { main: new THREE.Color(0x0088ff), sub: new THREE.Color(0xffffff) },
+            { main: new THREE.Color(0xff4444), sub: new THREE.Color(0xffffff) },
+            { main: new THREE.Color(0xff00ff), sub: new THREE.Color(0x00ffff) }
+        ];
+        let currentPaletteIndex = 0;
+        let targetColorMain = palettes[0].main;
+        let targetColorSub = palettes[0].sub;
+        const colorSnow = new THREE.Color(0xffffff);
+
+        for (let i = 0; i < particleCount; i++) {
+            let y = Math.random() * 5 - 2.5;
+
+            const distanceTop = 2.7 - y;
+            const layerHeight = 1.0;
+            const layerProgress = (distanceTop % layerHeight) / layerHeight;
+
+            let maxRadius = (distanceTop * 0.35) + (layerProgress * 0.5 * Math.sqrt(distanceTop));
+            if (maxRadius < 0) maxRadius = 0;
+
+            const r = maxRadius * (0.2 + 0.8 * Math.sqrt(Math.random()));
+
+            const angle = Math.random() * Math.PI * 2;
+            const x = Math.cos(angle) * r;
+            const z = Math.sin(angle) * r;
+
+            positions[i * 3] = x;
+            positions[i * 3 + 1] = y;
+            positions[i * 3 + 2] = z;
+
+            basePositions.push({ x, y, z });
+            scatterOffsets.push(new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize());
+
+            const isSub = Math.random() > 0.85;
+            particleTypes.push(isSub ? 1 : 0);
+
+            const c = isSub ? targetColorSub : targetColorMain;
+            colors[i * 3] = c.r;
+            colors[i * 3 + 1] = c.g;
+            colors[i * 3 + 2] = c.b;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        const material = new THREE.PointsMaterial({
+            size: 0.12,
+            map: createGlowTexture(false), vertexColors: true,
+            blending: THREE.AdditiveBlending, depthWrite: false, transparent: true
+        });
+        const particlesMesh = new THREE.Points(geometry, material);
+        scene.add(particlesMesh);
+
+        // --- 4. 星 (Star) ---
+        const starMaterial = new THREE.SpriteMaterial({
+            map: createGlowTexture(true),
+            color: 0xffffaa,
+            blending: THREE.AdditiveBlending
+        });
+        const starSprite = new THREE.Sprite(starMaterial);
+        starSprite.scale.set(1.5, 1.5, 1.0);
+        starSprite.position.set(0, 2.8, 0);
+        starSprite.visible = false;
+        scene.add(starSprite);
+
+        // --- 5. 文字 (Merry Xmas) ---
+        const textMaterial = new THREE.SpriteMaterial({
+            map: createTextTexture(),
+            transparent: true,
+            opacity: 0
+        });
+        const textSprite = new THREE.Sprite(textMaterial);
+        textSprite.scale.set(4, 1, 1);
+        textSprite.position.set(0, 4.0, 0);
+        scene.add(textSprite);
+
+        // --- 6. アニメーション & 音声制御 ---
+        let targetScale = 1.0;
+        let currentScale = 1.0;
+        let explosionFactor = 0.0;
+        let handDetected = false;
+        let lastColorChangeTime = 0;
+
+        let isFist = false;
+        let isPeace = false;
+        let isOpen = false;
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            currentScale += (targetScale - currentScale) * 0.1;
+
+            let targetExplosion = Math.max(0, (currentScale - 1.0) * 0.4);
+            targetExplosion = Math.min(targetExplosion, 1.0);
+            explosionFactor += (targetExplosion - explosionFactor) * 0.05;
+
+            // --- 音声コントロール ---
+            if (isPeace) {
+                // ★Xmasモード
+                if (bgmXmas.paused) bgmXmas.play().catch(() => { });
+
+                if (!bgmSnow.paused) {
+                    bgmSnow.pause();
+                    bgmSnow.currentTime = 0;
+                }
+            } else if (explosionFactor > 0.1) {
+                // ★雪モード
+                if (bgmSnow.paused) bgmSnow.play().catch(() => { });
+
+                if (!bgmXmas.paused) {
+                    bgmXmas.pause();
+                    bgmXmas.currentTime = 0;
+                }
+            } else {
+                // ★待機（両方停止＆リセット）
+                if (!bgmXmas.paused) {
+                    bgmXmas.pause();
+                    bgmXmas.currentTime = 0;
+                }
+                if (!bgmSnow.paused) {
+                    bgmSnow.pause();
+                    bgmSnow.currentTime = 0;
+                }
+            }
+
+            const time = Date.now() * 0.001;
+            const posAttr = geometry.attributes.position;
+            const colAttr = geometry.attributes.color;
+
+            for (let i = 0; i < particleCount; i++) {
+                const bx = basePositions[i].x;
+                const by = basePositions[i].y;
+                const bz = basePositions[i].z;
+                const sx = scatterOffsets[i].x;
+                const sy = scatterOffsets[i].y;
+                const sz = scatterOffsets[i].z;
+
+                // ツリーの揺らぎ
+                const wobble = Math.sin(time * 2 + by) * 0.02;
+
+                // 雪モードの動き
+                const snowX = sx * 6.0 + Math.sin(time * 0.5 + i) * 0.5;
+                const snowY = sy * 6.0 + Math.cos(time * 0.3 + i) * 0.5;
+                const snowZ = sz * 6.0 + Math.sin(time * 0.7 + i) * 0.5;
+
+                // 位置ブレンド
+                let px = bx + (snowX - bx) * explosionFactor;
+                let py = by + (snowY - by) * explosionFactor;
+                let pz = bz + (snowZ - bz) * explosionFactor;
+
+                posAttr.setXYZ(i, px * currentScale, py * currentScale, pz * currentScale);
+
+                // 色ブレンド
+                const baseC = (particleTypes[i] === 1) ? targetColorSub : targetColorMain;
+                const curR = colAttr.getX(i);
+                const curG = colAttr.getY(i);
+                const curB = colAttr.getZ(i);
+
+                const finalR = baseC.r + (colorSnow.r - baseC.r) * explosionFactor;
+                const finalG = baseC.g + (colorSnow.g - baseC.g) * explosionFactor;
+                const finalB = baseC.b + (colorSnow.b - baseC.b) * explosionFactor;
+
+                colAttr.setXYZ(i,
+                    curR + (finalR - curR) * 0.05,
+                    curG + (finalG - curG) * 0.05,
+                    curB + (finalB - curB) * 0.05
+                );
+            }
+            posAttr.needsUpdate = true;
+            colAttr.needsUpdate = true;
+
+            if (starSprite.visible) {
+                const pulse = 1.2 + Math.sin(time * 5) * 0.3;
+                starSprite.scale.set(pulse, pulse, 1.0);
+                starSprite.position.set(0, 2.8 * currentScale, 0);
+            }
+
+            // 文字の表示制御（チョキの時だけ）
+            const targetOpacity = isPeace ? 1.0 : 0.0;
+            textMaterial.opacity += (targetOpacity - textMaterial.opacity) * 0.05;
+
+            if (textMaterial.opacity > 0.01) {
+                textSprite.position.y = (4.0 + Math.sin(time * 2) * 0.2) * currentScale;
+                textSprite.visible = true;
+            } else {
+                textSprite.visible = false;
+            }
+
+            if (!handDetected) particlesMesh.rotation.y += 0.005;
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // --- 7. ジェスチャー判定 ---
+        const videoElement = document.getElementById('input_video');
+        const loadingElement = document.getElementById('loading');
+
+        function onResults(results) {
+            loadingElement.style.display = 'none';
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                handDetected = true;
+                const landmarks = results.multiHandLandmarks[0];
+
+                const isIndexOpen = landmarks[8].y < landmarks[6].y;
+                const isMiddleOpen = landmarks[12].y < landmarks[10].y;
+                const isRingOpen = landmarks[16].y < landmarks[14].y;
+                const isPinkyOpen = landmarks[20].y < landmarks[18].y;
+
+                isFist = !isIndexOpen && !isMiddleOpen && !isRingOpen && !isPinkyOpen;
+                isPeace = isIndexOpen && isMiddleOpen && !isRingOpen && !isPinkyOpen;
+                isOpen = isIndexOpen && isMiddleOpen && isRingOpen && isPinkyOpen;
+
+                starSprite.visible = isPeace;
+
+                if (isPeace) targetScale = 1.0;
+                if (isFist) targetScale = 0.2;
+
+                if (isOpen) {
+                    const now = Date.now();
+                    if (now - lastColorChangeTime > 1500) {
+                        changeColorPalette();
+                        lastColorChangeTime = now;
+                    }
+                }
+
+                if (!isFist && !isPeace) {
+                    const thumb = landmarks[4];
+                    const index = landmarks[8];
+                    const distance = Math.sqrt(Math.pow(thumb.x - index.x, 2) + Math.pow(thumb.y - index.y, 2));
+                    targetScale = 1.0 + (distance * 8.0);
+                }
+
+                const handCenterX = landmarks[9].x;
+                particlesMesh.rotation.y = (handCenterX - 0.5) * -3;
+                particlesMesh.rotation.x = (landmarks[9].y - 0.5) * -2;
+
+            } else {
+                handDetected = false;
+                starSprite.visible = false;
+                isPeace = false;
+                targetScale = 1.0;
+            }
+        }
+
+        function changeColorPalette() {
+            currentPaletteIndex = (currentPaletteIndex + 1) % palettes.length;
+            const p = palettes[currentPaletteIndex];
+            targetColorMain = p.main;
+            targetColorSub = p.sub;
+        }
+
+        const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+        hands.onResults(onResults);
+
+        const cameraUtils = new Camera(videoElement, {
+            onFrame: async () => { await hands.send({ image: videoElement }); },
+            width: 640, height: 480
+        });
+        cameraUtils.start();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+
+</html>
